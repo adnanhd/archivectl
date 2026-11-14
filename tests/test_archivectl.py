@@ -1,13 +1,17 @@
 """archivectl: delete reads back what list prints, -n writes nothing,
-delete without input does nothing, and stdout carries records only."""
+delete without input does nothing, stdout carries records only, archives
+are numbered once and for good, the passphrase is asked for at most once,
+remote repositories work as local ones, and the help and completions say
+what the code does."""
 from __future__ import annotations
 
 import os
+import pty
 import re
+import shlex
 import shutil
 import stat
 import subprocess
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,9 +19,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table, wait_for_a_new_second
+from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table
 
-RECORD = re.compile(r"(\d{4}-\d\d-\d\d_\d\d:\d\d:\d\d)\t(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)\t(\d+)")
+# a record of list: number, date, size
+RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)")
 WRITE_VERBS = ["create", "delete", "init", "initialise", "restore"]
 OLD_NAMES = ["backup", "prune", "mount", "extract", "size", "log"]
 OPTIONS = options_table()
@@ -63,17 +68,21 @@ def test_delete_reads_back_what_list_prints(ages: list[tuple[int, int]], filters
     with Sandbox() as box:
         box.initialise()
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        names = [box.fake_archive(now - timedelta(days=days, seconds=seconds)) for days, seconds in ages]
+        for days, seconds in ages:
+            box.fake_archive(now - timedelta(days=days, seconds=seconds))
+        # archives named the old way show the numbers they get, in time order
+        oldest_first = sorted(range(len(ages)), key=lambda i: ages[i], reverse=True)
+        numbers = {i: str(rank + 1) for rank, i in enumerate(oldest_first)}
         listed = box.run_ok("list", *[str(word) for option in filters.items() for word in option])
         assert listed.stderr == ""
         selected = record_names(listed.stdout)
-        assert selected == [names[i] for i in expected_selection(ages, filters)]
+        assert selected == [numbers[i] for i in expected_selection(ages, filters)]
         before = box.state()
         dry_run = box.run_ok("delete", "-n", stdin=listed.stdout)
         assert (dry_run.stdout, box.state()) == ("", before)
         assert re.findall(r"would delete archive (\S+)", dry_run.stderr) == selected
         assert box.run_ok("delete", stdin=listed.stdout).stdout == ""
-        assert record_names(box.run_ok("list").stdout) == sorted(set(names) - set(selected))
+        assert record_names(box.run_ok("list").stdout) == [numbers[i] for i in oldest_first if numbers[i] not in selected]
 
 
 @pytest.fixture(scope="module")
@@ -85,7 +94,8 @@ def listings(populated: Sandbox) -> dict[Path, str]:
 
 def draw_options(data: st.DataObject, verb: str, box: Sandbox) -> list[str]:
     """-n or --dry-run among a drawn subset of VERB's other options, values filled in."""
-    values = {"--to": str(box.root / "elsewhere"), "--mount": str(box.root / "mountpoint")}
+    values = {"--to": str(box.root / "elsewhere"), "--mount": str(box.root / "mountpoint"),
+              "--repo": str(box.root / "other-repository")}
     others = [(name, takes) for name, takes in OPTIONS[verb] if name not in ("-n", "--dry-run")]
     chosen = data.draw(st.lists(st.sampled_from(others), unique=True)) if others else []
     groups = [[name, values[name]] if takes else [name] for name, takes in chosen]
@@ -94,16 +104,16 @@ def draw_options(data: st.DataObject, verb: str, box: Sandbox) -> list[str]:
 
 
 def draw_operands(data: st.DataObject, verb: str, box: Sandbox, listing: str,
-                  cwd: Path) -> tuple[list[str], str]:
+                  cwd: Path) -> tuple[list[str], str | None]:
     """The arguments after the options and the standard input VERB needs, run from CWD."""
     if verb in ("init", "initialise"):
-        return data.draw(st.sampled_from([[], [str(box.source / "fresh")]])), ""
+        return data.draw(st.sampled_from([[], [str(box.source / "fresh")]])), None
     if verb == "delete":
-        return [], listing
+        return (record_names(listing), None) if data.draw(st.booleans()) else ([], listing)
     if verb == "restore":
         paths = REPOSITORY_PATHS["inner" if cwd.name == "inner" else "src"]
-        return [record_names(listing)[-1], *data.draw(st.lists(st.sampled_from(paths), unique=True))], ""
-    return [], ""
+        return [record_names(listing)[-1], *data.draw(st.lists(st.sampled_from(paths), unique=True))], None
+    return [], None
 
 
 @settings(max_examples=25)
@@ -114,11 +124,10 @@ def test_dry_run_writes_nothing(populated: Sandbox, listings: dict[Path, str], d
     cwd = data.draw(st.sampled_from(sorted(listings)))
     options = draw_options(data, verb, populated)
     operands, stdin = draw_operands(data, verb, populated, listings[cwd], cwd)
-    if verb == "create":
-        wait_for_a_new_second({name for listing in listings.values() for name in record_names(listing)})
     before = populated.state()
     result = populated.run(verb, *options, *operands, cwd=cwd, stdin=stdin)
-    refused = "--to" in options and "--mount" in options
+    refused = ("--to" in options and "--mount" in options or
+               "--store-passphrase" in options and ("--repo" in options or "--no-pass" in options))
     assert (result.returncode, result.stdout) == (2 if refused else 0, ""), result.stderr
     assert populated.state() == before
 
@@ -137,8 +146,10 @@ def test_stdout_carries_records_only(sandbox: Sandbox) -> None:
     sandbox.initialise()
     assert sandbox.run_ok("list").stdout == ""
     created = sandbox.run_ok("create")
-    assert created.stderr != ""
+    assert created.stderr == f"{TOOL.name}: created archive 1 of {sandbox.source}\n"
     assert len(record_names(created.stdout)) == 1
+    status = sandbox.run_ok("status")
+    assert (status.stdout.count("\n"), status.stderr) == (1, "")
     listed = sandbox.run_ok("list")
     assert (listed.stdout, listed.stderr) == (created.stdout, "")
     name = record_names(created.stdout)[0]
@@ -185,10 +196,10 @@ def test_delete_refuses_an_unknown_name(populated: Sandbox, listings: dict[Path,
     assert populated.state() == before
 
 
-def test_init_is_initialise(sandbox: Sandbox) -> None:
-    sandbox.run_ok("init", "-n")
+def test_initialise_is_init(sandbox: Sandbox) -> None:
+    sandbox.run_ok("initialise", "-n")
     assert not (sandbox.source / CONFIG).exists()
-    sandbox.run_ok("init")
+    sandbox.run_ok("initialise")
     assert (sandbox.source / CONFIG).read_text().count("BORG_REPO=") == 1
 
 
@@ -217,7 +228,6 @@ def test_diff_prints_one_record_per_changed_path(sandbox: Sandbox) -> None:
     expected = {("a.txt", "modified"), ("new.txt", "added"), ("plain/p.txt", "removed")}
     scratch = str(sandbox.root / "tmp")
     assert changes(sandbox.run_ok("diff", "--scratch", scratch, first).stdout) == expected
-    time.sleep(1)
     second = record_names(sandbox.run_ok("create").stdout)[0]
     assert changes(sandbox.run_ok("diff", first, second).stdout) == expected
     assert sandbox.run_ok("diff", "--scratch", scratch, second).stdout == ""
@@ -227,10 +237,10 @@ def test_diff_prints_one_record_per_changed_path(sandbox: Sandbox) -> None:
 def test_writes_are_logged_under_the_state_directory(sandbox: Sandbox) -> None:
     sandbox.initialise()
     name = record_names(sandbox.run_ok("create").stdout)[0]
-    logs = list((sandbox.home / ".local/state/archivectl").iterdir())
+    logs = list((sandbox.home / ".local/state/archivectl").glob("*.log"))
     assert len(logs) == 1
     assert "initialised" in logs[0].read_text()
-    assert f"created archive {name}" in logs[0].read_text()
+    assert f"created archive {name} of" in logs[0].read_text()
 
 
 def test_docs_agree_with_the_code() -> None:
@@ -266,14 +276,65 @@ def shim(box: Sandbox, name: str, script: str) -> None:
     box.env["PATH"] = f"{directory}:{box.env['PATH']}"
 
 
-def test_create_refuses_a_name_that_is_taken(sandbox: Sandbox) -> None:
+def test_creates_in_the_same_second_get_the_next_numbers(sandbox: Sandbox) -> None:
     sandbox.initialise()
-    shim(sandbox, "date", f'case "$1" in +%Y-%m-%d_%H:%M:%S) echo 2030-01-01_00:00:00 ;; '
+    shim(sandbox, "date", f'case "$1" in +%Y-%m-%d_%H%M%S) echo 2030-01-01_000000 ;; '
                           f'*) exec {shutil.which("date")} "$@" ;; esac\n')
-    first = sandbox.run_ok("create").stdout
-    result = sandbox.run("create")
-    assert (result.returncode, result.stdout) == (1, "") and "exists already" in result.stderr
-    assert sandbox.run_ok("list").stdout == first
+    created = [record_names(sandbox.run_ok("create").stdout)[0] for _ in range(2)]
+    assert created == ["1", "2"] and record_names(sandbox.run_ok("list").stdout) == created
+    assert archive_names(sandbox) == ["1_2030-01-01_000000", "2_2030-01-01_000000"]
+
+
+def archive_names(box: Sandbox, directory: Path | None = None) -> list[str]:
+    """The names of the archives of the repository of DIRECTORY (src), as borg lists them."""
+    listed = subprocess.run(["borg", "list", "--short", str(box.repository(directory))], env=box.env,
+                            capture_output=True, text=True, check=True).stdout
+    return sorted(listed.splitlines())
+
+
+def test_numbers_are_never_given_again_after_a_delete(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    created = [record_names(sandbox.run_ok("create").stdout)[0] for _ in range(2)]
+    sandbox.run_ok("delete", "2")
+    assert record_names(sandbox.run_ok("create").stdout) == ["3"]
+    sandbox.run_ok("delete", stdin=sandbox.run_ok("list").stdout)
+    assert record_names(sandbox.run_ok("create").stdout) == ["4"] and created == ["1", "2"]
+
+
+def test_a_number_and_a_full_name_name_one_archive(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    first = record_names(sandbox.run_ok("create").stdout)[0]
+    name = archive_names(sandbox)[0]
+    assert sandbox.run_ok("diff", first, name).stdout == ""
+    sandbox.run_ok("restore", "--to", str(sandbox.root / "out"), name, "a.txt")
+    assert (sandbox.root / "out/a.txt").read_text() == "outer\n"
+    assert re.findall(r"would delete archive (\S+)", sandbox.run_ok("delete", "-n", name, first).stderr) == [first]
+    sandbox.run_ok("delete", name)
+    assert sandbox.run_ok("list").stdout == ""
+
+
+def test_archives_named_otherwise_are_numbered_once_in_time_order(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    for moment in (datetime(2026, 6, 1, 12, tzinfo=timezone.utc), datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)):
+        sandbox.fake_archive(moment)
+    sandbox.borg("create", "--timestamp", "2026-03-01T00:00:00", f"{sandbox.repository()}::by-hand", ".",
+                 cwd=sandbox.source / "plain")
+    listed = sandbox.run_ok("list").stdout
+    assert [line.split("\t")[:2] for line in listed.splitlines()] == [
+        ["1", "2026-01-02 03:04:05"], ["2", "2026-03-01 00:00:00"], ["3", "2026-06-01 12:00:00"]]
+    sandbox.run_ok("restore", "--to", str(sandbox.root / "out"), "2")
+    assert (sandbox.root / "out/p.txt").exists()
+    before = sandbox.state()
+    assert sandbox.run_ok("diff", "1", "by-hand").stdout == ""
+    for args in (["create", "-n"], ["delete", "-n", "2"]):
+        result = sandbox.run_ok(*args)
+        assert len(re.findall(r"would give archive \S+ the number", result.stderr)) == 3
+    assert sandbox.state() == before
+    created = sandbox.run_ok("create")
+    assert record_names(created.stdout) == ["4"] and created.stderr.count("gave archive") == 3
+    assert archive_names(sandbox)[:3] == ["1_2026-01-02_030405", "2_2026-03-01_000000", "3_2026-06-01_120000"]
+    assert sandbox.run_ok("list").stdout.splitlines()[:3] == listed.splitlines()
+    assert "gave archive" not in sandbox.run_ok("delete", "2").stderr
 
 
 def test_a_failed_create_deletes_only_the_archive_it_made(sandbox: Sandbox) -> None:
@@ -290,12 +351,15 @@ def test_a_failed_create_deletes_only_the_archive_it_made(sandbox: Sandbox) -> N
     assert len(record_names(sandbox.run_ok("list").stdout)) == 1
 
 
-def test_delete_takes_no_names_as_arguments(populated: Sandbox, listings: dict[Path, str]) -> None:
-    name = record_names(listings[populated.source])[0]
+def test_delete_takes_ids_as_arguments_or_on_standard_input_not_both(populated: Sandbox,
+                                                                     listings: dict[Path, str]) -> None:
+    numbers = record_names(listings[populated.source])
     before = populated.state()
-    for stdin in ("", name + "\n"):
-        result = populated.run("delete", name, stdin=stdin)
-        assert (result.returncode, result.stdout) == (2, "")
+    dry_run = populated.run_ok("delete", "-n", *numbers)
+    assert re.findall(r"would delete archive (\S+)", dry_run.stderr) == numbers
+    for stdin in ("", numbers[0] + "\n"):
+        result = populated.run("delete", numbers[0], stdin=stdin)
+        assert (result.returncode, result.stdout) == (2, "") and "not both" in result.stderr
     assert populated.state() == before
 
 
@@ -306,7 +370,7 @@ def test_a_name_that_names_no_archive_ends_with_status_1(populated: Sandbox, arg
     before = populated.state()
     result = populated.run(*[arg.format(root=populated.root) for arg in args])
     assert (result.returncode, result.stdout) == (1, "")
-    assert "no such id: nosuch" in result.stderr
+    assert "no such archive: nosuch" in result.stderr
     assert populated.state() == before
 
 
@@ -336,8 +400,8 @@ def test_repositories_made_by_dedupctl_keep_working(sandbox: Sandbox) -> None:
     assert (sandbox.repository() / "logs").is_dir()
     first = newest(sandbox)
     sandbox.run_ok("check")
-    wait_for_a_new_second({first})
     second = record_names(sandbox.run_ok("create").stdout)[0]
+    assert (first, second) == ("1", "2") and archive_names(sandbox)[0].startswith("1_")
     sandbox.run_ok("restore", "--to", str(sandbox.root / "out"), first, "a.txt")
     assert (sandbox.root / "out/a.txt").read_text() == "outer\n"
     assert sandbox.run_ok("diff", first, second).stdout == ""
@@ -361,11 +425,12 @@ def test_the_log_is_private_and_holds_no_borg_output(sandbox: Sandbox) -> None:
     sandbox.run_ok("create")
     directory = sandbox.home / ".local/state/archivectl"
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
-    logs = list(directory.iterdir())
-    assert [stat.S_IMODE(log.stat().st_mode) for log in logs] == [0o600]
+    assert {stat.S_IMODE(path.stat().st_mode) for path in directory.iterdir()} == {0o600}
+    logs = list(directory.glob("*.log"))
     text = logs[0].read_text()
-    assert "passphrase" not in text.lower() and "Archive fingerprint" not in text
-    assert all(line.split(" ", 1)[1].startswith(("initialised ", "created ")) for line in text.splitlines())
+    assert "throwaway" not in text and "Archive fingerprint" not in text
+    assert all(line.split(" ", 1)[1].startswith(("initialised ", "kept the passphrase in pass ", "created "))
+               for line in text.splitlines())
 
 
 @pytest.mark.parametrize("name", ["cost$USER", "`touch PWNED`"])
@@ -377,6 +442,9 @@ def test_a_path_with_shell_characters_stays_one_path(sandbox: Sandbox, name: str
     assert sandbox.repository(directory).parent == sandbox.backups
     archive = record_names(sandbox.run_ok("create", cwd=directory).stdout)[0]
     assert archive == newest(sandbox, directory)
+    # the passphrase comes from pass, through the BORG_PASSCOMMAND init wrote
+    del sandbox.env["BORG_PASSPHRASE"]
+    assert record_names(sandbox.run_ok("list", cwd=directory).stdout) == [archive]
     assert not list(sandbox.root.rglob("PWNED"))
 
 
@@ -395,16 +463,8 @@ def test_diff_escapes_paths_and_reports_changes_of_type(sandbox: Sandbox) -> Non
     expected = {("typ", "modified"), ("lnk", "modified"), ("tab\\tname", "added"), ("new\\nline", "added"),
                 ("back\\\\slash", "added"), ("türkçe ş", "added")}
     assert changes(sandbox.run_ok("diff", "--scratch", str(sandbox.root / "tmp"), first).stdout) == expected
-    wait_for_a_new_second({first})
     second = record_names(sandbox.run_ok("create").stdout)[0]
     assert changes(sandbox.run_ok("diff", first, second).stdout) == expected
-
-
-def test_completions_know_the_init_alias() -> None:
-    script = (f"source {ROOT}/completions/bash/{TOOL.name}.bash; COMP_WORDS=({TOOL.name} init -); "
-              f'COMP_CWORD=2; _{TOOL.name}; printf "%s\\n" "${{COMPREPLY[@]}}"')
-    offered = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout.split()
-    assert {"-n", "--dry-run"} <= set(offered)
 
 
 def test_both_diffs_give_the_bytes_of_a_name_that_is_not_utf8(sandbox: Sandbox) -> None:
@@ -424,7 +484,6 @@ def test_both_diffs_give_the_bytes_of_a_name_that_is_not_utf8(sandbox: Sandbox) 
                 ("tab\\tname", "added")}
     live = sandbox.run_ok("diff", "--scratch", str(sandbox.root / "tmp"), first).stdout
     assert changes(live) == expected
-    wait_for_a_new_second({first})
     second = record_names(sandbox.run_ok("create").stdout)[0]
     assert changes(sandbox.run_ok("diff", first, second).stdout) == expected
 
@@ -460,7 +519,7 @@ def test_a_long_path_keeps_its_names_under_name_max(sandbox: Sandbox) -> None:
     sandbox.run_ok("create", cwd=directory)
     names = [path.name for path in sandbox.backups.iterdir()]
     names += [path.name for path in (sandbox.home / ".local/state/archivectl").iterdir()]
-    assert len(names) == 2 and max(len(os.fsencode(name)) for name in names) <= 255
+    assert len(names) == 3 and max(len(os.fsencode(name)) for name in names) <= 255
 
 
 MAKE_DIRECTORIES = {"BINDIR": "bin", "LIBDIR": f"lib/{TOOL.name}", "BASH_COMPLETIONS_DIR": "share/bash-completion/completions",
@@ -510,18 +569,6 @@ def test_list_old_shows_what_uninstall_old_removes(tmp_path: Path) -> None:
     assert sorted(path for path in prefix.rglob("*") if not path.is_dir()) == installed
 
 
-def test_fish_completes_directories_after_initialise(tmp_path: Path) -> None:
-    if shutil.which("fish") is None:
-        pytest.skip("fish is not installed")
-    (tmp_path / "subdir").mkdir()
-    script = (f"source {ROOT}/completions/fish/{TOOL.name}.fish; "
-              f"complete -C '{TOOL.name} initialise su'; complete -C '{TOOL.name} init su'")
-    env = {**os.environ, "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path), "XDG_DATA_HOME": str(tmp_path)}
-    offered = subprocess.run(["fish", "--no-config", "-c", script], cwd=tmp_path, env=env,
-                             capture_output=True, text=True, check=True).stdout.split()
-    assert offered == ["subdir/", "subdir/"]
-
-
 def test_create_without_its_source_fails_and_still_creates_in_the_parent(sandbox: Sandbox) -> None:
     inner = sandbox.source / "inner"
     sandbox.initialise()
@@ -541,7 +588,7 @@ def test_the_log_names_files_borg_could_not_read_and_not_its_messages(sandbox: S
     (sandbox.source / "C dir/secret").chmod(0)
     sandbox.initialise()
     assert sandbox.run("create").returncode == 0
-    text = next((sandbox.home / ".local/state/archivectl").iterdir()).read_text()
+    text = next((sandbox.home / ".local/state/archivectl").glob("*.log")).read_text()
     assert "C dir/secret could not be read" in text
     assert "changed while borg read it" not in text and "Errno" not in text
 
@@ -567,7 +614,6 @@ def test_both_diffs_agree_on_hard_links_whose_names_show_alike(sandbox: Sandbox)
     expected = {("c", "modified"), ("u", "added"), (os.fsdecode(b"a\xff"), "modified"), ("m/a.txt", "modified"),
                 ("q/why?.txt", "modified")}
     assert changes(sandbox.run_ok("diff", "--scratch", str(sandbox.root / "tmp"), first).stdout) == expected
-    wait_for_a_new_second({first})
     second = record_names(sandbox.run_ok("create").stdout)[0]
     assert changes(sandbox.run_ok("diff", first, second).stdout) == expected
 
@@ -579,7 +625,6 @@ def archives_with_names_that_show_alike(box: Sandbox) -> tuple[str, str]:
     box.initialise()
     first = record_names(box.run_ok("create").stdout)[0]
     name_of(box, b"a\xff").write_text("changed\n")
-    wait_for_a_new_second({first})
     return first, record_names(box.run_ok("create").stdout)[0]
 
 
@@ -610,7 +655,7 @@ def test_files_borg_could_not_read_are_named_with_their_own_bytes(sandbox: Sandb
     assert result.returncode == 0
     stderr = os.fsencode(result.stderr)
     assert b"x\xfe" in stderr and b"x\xff" in stderr and b"\xed\xb3" not in stderr
-    log = next((sandbox.home / ".local/state/archivectl").iterdir()).read_bytes()
+    log = next((sandbox.home / ".local/state/archivectl").glob("*.log")).read_bytes()
     assert b"x\xfe could not be read" in log and b"x\xff could not be read" in log
 
 
@@ -622,5 +667,296 @@ def test_a_source_borg_cannot_enter_is_reported_as_such(sandbox: Sandbox) -> Non
     result = sandbox.run("create")
     assert (result.returncode, result.stdout) == (1, "")
     assert "no directory ./closed it can read" in result.stderr and "borg status" not in result.stderr
-    log = next((sandbox.home / ".local/state/archivectl").iterdir()).read_text()
+    log = next((sandbox.home / ".local/state/archivectl").glob("*.log")).read_text()
     assert "no directory ./closed it can read" in log
+
+
+def test_delete_with_a_terminal_on_stdin_waits_for_nothing(populated: Sandbox) -> None:
+    before = populated.state()
+    leader, follower = pty.openpty()
+    try:
+        result = subprocess.run([str(TOOL), "delete", "-n"], cwd=populated.source, stdin=follower,
+                                capture_output=True, text=True, env=populated.env, timeout=60)
+    finally:
+        os.close(follower)
+        os.close(leader)
+    assert (result.returncode, result.stdout) == (2, "")
+    assert f"{TOOL.name} list --older 30 | {TOOL.name} delete -n" in result.stderr
+    assert result.stderr.count("\n") == 1
+    assert populated.state() == before
+
+
+
+
+def bash_completion(box: Sandbox, line: str) -> list[str]:
+    """What the bash completion offers for LINE, the cursor at its end, run in src/."""
+    script = (f"source {ROOT}/completions/bash/{TOOL.name}.bash; COMP_LINE=$1; COMP_POINT=${{#1}}; "
+              f'_{TOOL.name}; printf "%s\\n" "${{COMPREPLY[@]}}"')
+    result = subprocess.run(["bash", "-c", script, "bash", line], cwd=box.source, env=box.env, stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, check=True)
+    return sorted(word for word in result.stdout.split("\n") if word)
+
+
+def fish_completion(box: Sandbox, line: str) -> list[str]:
+    """What the fish completion offers for LINE, run in src/: candidate and description, one per line."""
+    if shutil.which("fish") is None:
+        pytest.skip("fish is not installed")
+    script = f"source {ROOT}/completions/fish/{TOOL.name}.fish; complete -C {shlex.quote(line)}"
+    result = subprocess.run(["fish", "--no-config", "-c", script], cwd=box.source, env=box.env,
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True)
+    return sorted(result.stdout.splitlines())
+
+
+def completion_sandbox(box: Sandbox) -> list[str]:
+    """src initialised, its passphrase in pass, with two archives and the tool
+    on PATH, but no passphrase in the environment; the archives' records"""
+    box.initialise()
+    box.run_ok("create")
+    box.run_ok("create")
+    box.env["PATH"] = f"{ROOT}:{box.env['PATH']}"
+    del box.env["BORG_PASSPHRASE"]
+    return box.run_ok("list").stdout.splitlines()
+
+
+def test_bash_completes_numbers_directories_and_the_paths_in_an_archive(sandbox: Sandbox) -> None:
+    completion_sandbox(sandbox)
+    directories = ["fresh", "inner", "plain"]
+    cases = {"restore ": ["1", "2"], "delete ": ["1", "2"], "delete 1 ": ["1", "2"], "diff 1 ": ["1", "2"],
+             "diff 1 2 ": [], "restore 1 pl": ["plain/"], "restore 1 plain/": ["plain/p.txt"],
+             "restore --to /x 2 inner/s": ["inner/sub/"], "init ": directories, "init fresh ": [], "-C ": directories,
+             "restore --to ": directories, "restore --mount ": directories, "diff --scratch ": directories,
+             "init --repo ": [], "list --older ": [], "create ": [], "check ": [], "list ": [], "status ": [],
+             f"-C {sandbox.root} restore ": [], f"-C {sandbox.source}/plain restore ": ["1", "2"]}
+    for line, offered in cases.items():
+        assert bash_completion(sandbox, f"{TOOL.name} {line}") == sorted(offered), line
+
+
+def test_fish_completes_numbers_with_dates_directories_and_the_paths_in_an_archive(sandbox: Sandbox) -> None:
+    records = completion_sandbox(sandbox)
+    dated = sorted("\t".join(record.split("\t")[:2]) for record in records)
+    directories = ["fresh/\tDirectory", "inner/\tDirectory", "plain/\tDirectory"]
+    cases = {"restore ": dated, "delete ": dated, "delete 1 ": dated, "diff 1 ": dated, "diff 1 2 ": [],
+             "restore 1 pl": ["plain/"], "restore 1 plain/": ["plain/p.txt"], "init ": directories,
+             "-C ": directories, "restore --to ": directories, "restore --mount ": directories,
+             "diff --scratch ": directories, "init --repo ": [], "list --older ": [], "list --last ": [],
+             "create ": [], "check ": [], "list ": [], "status ": [], f"-C {sandbox.source}/plain restore ": dated}
+    for line, offered in cases.items():
+        assert fish_completion(sandbox, f"{TOOL.name} {line}") == offered, line
+
+
+def test_completion_runs_no_borg_that_would_ask_for_the_passphrase(sandbox: Sandbox) -> None:
+    sandbox.initialise(None, TOOL, "init", "--no-pass")
+    sandbox.run_ok("create")
+    sandbox.env["PATH"] = f"{ROOT}:{sandbox.env['PATH']}"
+    assert bash_completion(sandbox, f"{TOOL.name} restore ") == ["1"]
+    del sandbox.env["BORG_PASSPHRASE"]
+    for line in ("restore ", "restore 1 pl", "delete "):
+        assert bash_completion(sandbox, f"{TOOL.name} {line}") == [], line
+    if shutil.which("fish") is not None:
+        assert fish_completion(sandbox, f"{TOOL.name} restore ") == []
+
+
+def help_phrases() -> dict[str, str]:
+    """Each command of the top-level help and the phrase after it."""
+    lines = subprocess.run([str(TOOL), "--help"], capture_output=True, text=True, check=True).stdout.splitlines()
+    phrases: dict[str, str] = {}
+    for i, line in enumerate(lines):
+        match = re.match(r"^  ([a-z]+)\b(.*?)(?:\s{2,}(\S.*))?$", line)
+        if match and match.group(1) != TOOL.name:
+            phrases[match.group(1)] = match.group(3) or lines[i + 1].strip()
+    return phrases
+
+
+def test_the_help_fits_one_screen_and_every_command_has_its_own() -> None:
+    result = subprocess.run([str(TOOL), "--help"], capture_output=True, text=True)
+    lines = result.stdout.splitlines()
+    assert result.returncode == 0 and len(lines) <= 24 and max(map(len, lines)) <= 80
+    commands = sorted(help_phrases())
+    assert commands == sorted(name for name in OPTIONS if name != "initialise")
+    for command in commands + ["initialise"]:
+        own = subprocess.run([str(TOOL), command, "--help"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        assert own.returncode == 0 and own.stdout.startswith("Usage:\n"), command
+        assert f"{TOOL.name} {'init' if command == 'initialise' else command}" in own.stdout.splitlines()[1]
+        assert own.stdout != result.stdout
+
+
+def test_completions_describe_commands_with_the_phrases_of_the_help() -> None:
+    phrases = help_phrases()
+    fish = (ROOT / "completions/fish" / f"{TOOL.name}.fish").read_text()
+    fished = dict(re.findall(r"-a (\w+) -d '([^']*)'", fish))
+    zsh = (ROOT / "completions/zsh" / f"_{TOOL.name}").read_text()
+    zshed = {name: text.replace("\\:", ":") for name, text in re.findall(r"^    '(\w+):(.*)'$", zsh, re.M)}
+    for command, phrase in phrases.items():
+        assert fished[command] == phrase and zshed[command] == phrase, command
+
+
+def test_status_prints_the_source_and_the_bare_command_status_then_help(sandbox: Sandbox) -> None:
+    result = sandbox.run("status")
+    assert (result.returncode, result.stdout) == (1, "") and CONFIG in result.stderr
+    sandbox.initialise()
+    repository = str(sandbox.repository())
+    assert sandbox.run_ok("status").stdout.split("\t")[:5] == [str(sandbox.source), repository, "0", "", ""]
+    sandbox.run_ok("create")
+    date = sandbox.run_ok("list").stdout.split("\t")[1]
+    fields = sandbox.run_ok("status", cwd=sandbox.source / "plain").stdout.rstrip("\n").split("\t")
+    assert fields[:5] == [str(sandbox.source), repository, "1", "1", date] and int(fields[5]) > 0
+    assert sandbox.run_ok().stdout.startswith(sandbox.run_ok("status").stdout + "usage: ")
+    elsewhere = sandbox.run(cwd=sandbox.root)
+    assert elsewhere.returncode == 1 and elsewhere.stdout.startswith("usage: ") and CONFIG in elsewhere.stderr
+
+
+def test_dash_c_runs_as_if_started_in_the_directory(populated: Sandbox, listings: dict[Path, str]) -> None:
+    inner = populated.source / "inner"
+    assert populated.run_ok("-C", str(inner), "list", cwd=populated.root).stdout == listings[inner]
+    assert populated.run_ok("-C", "src", "-C", "inner", "status", cwd=populated.root).stdout.startswith(f"{inner}\t")
+    result = populated.run("-C", str(populated.root / "nowhere"), "list")
+    assert (result.returncode, result.stdout) == (2, "")
+
+
+def test_create_prints_borg_statistics_only_with_stats(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    assert sandbox.run_ok("create").stderr.count("\n") == 1
+    with_stats = sandbox.run_ok("create", "--stats")
+    assert "Archive fingerprint" in with_stats.stderr and with_stats.stderr.count("\n") > 5
+    assert record_names(with_stats.stdout) == ["2"]
+
+
+def test_init_keeps_the_passphrase_in_pass_and_commands_read_it_from_there(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    entry = sandbox.root / "pass" / TOOL.name / f"{storage_name('safe_name', sandbox.source)}.gpg"
+    assert entry.read_text() == "throwaway\n"
+    assert sandbox.config_value("BORG_PASSCOMMAND") == f"pass show '{TOOL.name}/{entry.name[:-4]}'"
+    del sandbox.env["BORG_PASSPHRASE"]
+    assert record_names(sandbox.run_ok("create").stdout) == ["1"]
+    assert record_names(sandbox.run_ok("list").stdout) == ["1"]
+    (sandbox.source / CONFIG).unlink()
+    result = sandbox.run("init")
+    assert result.returncode == 1 and "pass holds" in result.stderr and not (sandbox.source / CONFIG).exists()
+
+
+def test_store_passphrase_moves_an_old_source_to_pass(sandbox: Sandbox) -> None:
+    sandbox.initialise(None, TOOL, "init", "--no-pass")
+    assert "BORG_PASSCOMMAND" not in (sandbox.source / CONFIG).read_text()
+    sandbox.run_ok("create")
+    before = sandbox.state()
+    sandbox.run_ok("init", "-n", "--store-passphrase")
+    sandbox.env["BORG_PASSPHRASE"] = "wrong"
+    result = sandbox.run("init", "--store-passphrase")
+    assert result.returncode == 1 and "not the passphrase" in result.stderr
+    assert sandbox.state() == before
+    sandbox.env["BORG_PASSPHRASE"] = "throwaway"
+    sandbox.run_ok("init", "--store-passphrase")
+    assert sandbox.config_value("BORG_PASSCOMMAND").startswith("pass show ")
+    assert "already" in sandbox.run_ok("init", "--store-passphrase").stderr
+    del sandbox.env["BORG_PASSPHRASE"]
+    assert record_names(sandbox.run_ok("list").stdout) == ["1"]
+
+
+def run_on_a_terminal(box: Sandbox, *args: str, answer: bytes) -> tuple[int, str]:
+    """TOOL with ARGS in src/ on a terminal of its own, ANSWER typed at each
+    passphrase prompt; its status and all it wrote there."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(box.source)
+        os.execve(str(TOOL), [str(TOOL), *args], box.env)
+    output = b""
+    answered = 0
+    while True:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        output += chunk
+        while output.count(b"assphrase for") > answered:
+            os.write(fd, answer + b"\n")
+            answered += 1
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return os.waitstatus_to_exitcode(status), output.decode(errors="replace").replace("\r", "")
+
+
+def test_without_a_passphrase_set_it_is_read_once_or_refused(sandbox: Sandbox) -> None:
+    sandbox.initialise(None, TOOL, "init", "--no-pass")
+    sandbox.run_ok("create")
+    sandbox.run_ok("create")
+    del sandbox.env["BORG_PASSPHRASE"]
+    status, output = run_on_a_terminal(sandbox, "list", answer=b"throwaway")
+    assert status == 0 and output.count("assphrase for") == 1
+    assert [line.split("\t")[0] for line in output.splitlines() if RECORD.fullmatch(line)] == ["1", "2"]
+    result = sandbox.run("list")
+    assert (result.returncode, result.stdout) == (1, "") and "needs its passphrase" in result.stderr
+
+
+def test_init_reads_the_passphrase_of_a_new_repository_once(sandbox: Sandbox) -> None:
+    del sandbox.env["BORG_PASSPHRASE"]
+    status, output = run_on_a_terminal(sandbox, "init", answer=b"typed once")
+    assert status == 0 and output.count("assphrase for") == 1, output
+    sandbox.borg("config", str(sandbox.repository()), "max_segment_size", "1048576")
+    assert record_names(sandbox.run_ok("create").stdout) == ["1"]
+    result = sandbox.run("init", str(sandbox.source / "fresh"))
+    assert result.returncode == 1 and "BORG_PASSPHRASE" in result.stderr
+
+
+def fake_ssh(box: Sandbox) -> str:
+    """BORG_RSH for a host that is borg serve in remote/ of the sandbox; the URL of that directory."""
+    remote = box.root / "remote"
+    remote.mkdir()
+    (box.root / "bin" / "fake-ssh").write_text(f"#!/bin/sh\ncd {remote} && exec borg serve --restrict-to-path {remote}\n")
+    (box.root / "bin" / "fake-ssh").chmod(0o755)
+    box.env["BORG_RSH"] = str(box.root / "bin" / "fake-ssh")
+    return f"ssh://tester@fakehost{remote}"
+
+
+def test_a_repository_on_another_host_works_as_a_local_one(sandbox: Sandbox) -> None:
+    url = fake_ssh(sandbox)
+    sandbox.run_ok("init", "--repo", f"{url}/papers")
+    assert sandbox.config_value("BORG_REPO") == f"{url}/papers"
+    sandbox.borg("config", str(sandbox.root / "remote/papers"), "max_segment_size", "1048576")
+    first = record_names(sandbox.run_ok("create").stdout)[0]
+    (sandbox.source / "a.txt").write_text("changed\n")
+    second = record_names(sandbox.run_ok("create").stdout)[0]
+    assert record_names(sandbox.run_ok("list").stdout) == [first, second] == ["1", "2"]
+    assert changes(sandbox.run_ok("diff", first, second).stdout) == {("a.txt", "modified")}
+    sandbox.run_ok("restore", "--to", str(sandbox.root / "out"), first, "a.txt")
+    assert (sandbox.root / "out/a.txt").read_text() == "outer\n"
+    sandbox.run_ok("check")
+    sandbox.run_ok("delete", first)
+    assert record_names(sandbox.run_ok("list").stdout) == [second]
+    # a root that is a URL holds the repository of each source under its name
+    sandbox.env["BORG_BACKUP_ROOT"] = url
+    inner = sandbox.source / "inner"
+    sandbox.run_ok("init", cwd=inner)
+    name = storage_name("safe_name", inner)
+    assert sandbox.config_value("BORG_REPO", inner) == f"{url}/{name}" and (sandbox.root / "remote" / name).is_dir()
+    # init on a source whose repository is there already uses it
+    (inner / CONFIG).unlink()
+    (sandbox.root / "pass" / TOOL.name / f"{name}.gpg").unlink()
+    assert "using the existing" in sandbox.run_ok("init", cwd=inner).stderr
+
+
+def storage_name(function: str, path: Path) -> str:
+    """What FUNCTION of lib/common.sh makes of PATH."""
+    script = 'source "$0" && "$1" "$2"'
+    return subprocess.run(["bash", "-c", script, str(ROOT / "lib" / "common.sh"), function, str(path)],
+                          capture_output=True, text=True, check=True).stdout.rstrip("\n")
+
+
+def test_repositories_are_named_after_the_path_and_found_under_the_earlier_name(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    assert sandbox.repository() == sandbox.backups / storage_name("safe_name", sandbox.source)
+    assert storage_name("safe_name", Path("/home/adhd/test")) == "home__adhd__test"
+    inner = sandbox.source / "inner"
+    encoded = sandbox.backups / storage_name("encoded_name", inner)
+    sandbox.borg("init", "--encryption=repokey", str(encoded))
+    sandbox.run_ok("init", cwd=inner)
+    assert sandbox.repository(inner) == encoded
+
+
+def test_storage_goes_under_data_backup_when_data_is_mounted(sandbox: Sandbox) -> None:
+    del sandbox.env["BORG_BACKUP_ROOT"]
+    mounted = subprocess.run(["mountpoint", "-q", "/data"], check=False).returncode == 0
+    root = "/data/backup/borg" if mounted else str(sandbox.home / ".borg_backups")
+    result = sandbox.run_ok("init", "-n")
+    assert f"initialise the Borg repository {root}/{storage_name('safe_name', sandbox.source)}" in result.stderr

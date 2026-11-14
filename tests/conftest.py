@@ -9,10 +9,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 
@@ -23,7 +22,17 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOL = ROOT / "archivectl"
 CONFIG = ".borgbackup"
 CONFIGS = (".myrsyncbackup", ".borgbackup")
-NAME_FORMAT = "%Y-%m-%d_%H:%M:%S"
+# how versions before numbers named an archive
+OLD_NAME_FORMAT = "%Y-%m-%d_%H:%M:%S"
+# a pass that keeps its entries as plain files in $PASSWORD_STORE_DIR
+PASS_STUB = """#!/bin/sh
+case "$1" in
+    insert) shift; [ "$1" = -m ] && shift; mkdir -p "$PASSWORD_STORE_DIR/$(dirname "$1")"; cat >"$PASSWORD_STORE_DIR/$1.gpg" ;;
+    show) cat "$PASSWORD_STORE_DIR/$2.gpg" ;;
+    rm) shift; [ "$1" = -f ] && shift; rm -f "$PASSWORD_STORE_DIR/$1.gpg" ;;
+    *) exit 1 ;;
+esac
+"""
 # dedupctl as it was before archivectl, and the backuplib it used
 OLD_COMMIT, OLD_LIB_COMMIT = "af2fef1", "560f5db"
 
@@ -70,8 +79,9 @@ def export(repository: Path, commit: str, destination: Path) -> None:
 
 class Sandbox:
     """home/ (HOME and XDG dirs), backups/ (the backup root), borg/ (Borg's
-    own cache and security files) and src/, the source, with src/plain a
-    plain directory and src/inner a nested source."""
+    own cache and security files), pass/ (the entries of a pass stub in
+    bin/) and src/, the source, with src/plain a plain directory and
+    src/inner a nested source."""
 
     def __init__(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix=f"{TOOL.name}-test."))
@@ -79,9 +89,12 @@ class Sandbox:
         self.home = self.root / "home"
         self.backups = self.root / "backups"
         self.source = self.root / "src"
-        for directory in (self.home, self.backups, self.root / "borg", self.root / "tmp",
-                          self.source / "plain", self.source / "inner" / "sub", self.source / "fresh"):
+        for directory in (self.home, self.backups, self.root / "borg", self.root / "tmp", self.root / "pass",
+                          self.root / "bin", self.source / "plain", self.source / "inner" / "sub",
+                          self.source / "fresh"):
             directory.mkdir(parents=True)
+        (self.root / "bin" / "pass").write_text(PASS_STUB)
+        (self.root / "bin" / "pass").chmod(0o755)
         for name, text in {"a.txt": "outer", "plain/p.txt": "plain", "inner/b.txt": "inner",
                            "inner/sub/c.txt": "sub"}.items():
             (self.source / name).write_text(text + "\n")
@@ -94,7 +107,8 @@ class Sandbox:
                    XDG_CACHE_HOME=str(self.home / ".cache"), XDG_DATA_HOME=str(self.home / ".local/share"),
                    XDG_STATE_HOME=str(self.home / ".local/state"), TMPDIR=str(self.root / "tmp"),
                    BORG_BACKUP_ROOT=str(self.backups), BORG_BASE_DIR=str(self.root / "borg"),
-                   BORG_PASSPHRASE="throwaway", BORG_DISPLAY_PASSPHRASE="no", TZ="UTC")
+                   BORG_PASSPHRASE="throwaway", BORG_DISPLAY_PASSPHRASE="no", TZ="UTC",
+                   PASSWORD_STORE_DIR=str(self.root / "pass"), PATH=f"{self.root / 'bin'}:{os.environ['PATH']}")
         return env
 
     def __enter__(self) -> Sandbox:
@@ -105,12 +119,14 @@ class Sandbox:
         subprocess.run(["chmod", "-R", "u+rwx", str(self.root)], check=False)
         shutil.rmtree(self.root)
 
-    def run(self, *args: str, cwd: Path | None = None, stdin: str = "", tool: Path = TOOL) -> Result:
+    def run(self, *args: str, cwd: Path | None = None, stdin: str | None = None, tool: Path = TOOL) -> Result:
+        """TOOL with ARGS in CWD (src); STDIN piped in, or else /dev/null as input."""
         completed = subprocess.run([str(tool), *args], cwd=cwd or self.source, input=stdin,
+                                   stdin=subprocess.DEVNULL if stdin is None else None,
                                    capture_output=True, text=True, errors="surrogateescape", env=self.env, timeout=300)
         return Result(completed.returncode, completed.stdout, completed.stderr)
 
-    def run_ok(self, *args: str, cwd: Path | None = None, stdin: str = "", tool: Path = TOOL) -> Result:
+    def run_ok(self, *args: str, cwd: Path | None = None, stdin: str | None = None, tool: Path = TOOL) -> Result:
         result = self.run(*args, cwd=cwd, stdin=stdin, tool=tool)
         assert result.returncode == 0, f"{args}: {result.stderr}"
         return result
@@ -126,9 +142,10 @@ class Sandbox:
             entries += [describe(Path(directory) / name) for name in subdirectories + files]
         return sorted(entries)
 
-    def initialise(self, directory: Path | None = None, tool: Path = TOOL, verb: str = "initialise") -> None:
-        """Initialise DIRECTORY (src); small segments keep borg's free space check under 30 MB."""
-        self.run_ok(verb, cwd=directory or self.source, tool=tool)
+    def initialise(self, directory: Path | None = None, tool: Path = TOOL, verb: str = "initialise",
+                   *flags: str) -> None:
+        """Initialise DIRECTORY (src) with FLAGS; small segments keep borg's free space check under 30 MB."""
+        self.run_ok(verb, *flags, cwd=directory or self.source, tool=tool)
         self.borg("config", str(self.repository(directory)), "max_segment_size", "1048576")
 
     def populate(self) -> None:
@@ -148,8 +165,9 @@ class Sandbox:
         return Path(self.config_value("BORG_REPO", directory))
 
     def fake_archive(self, moment: datetime) -> str:
-        """An archive of src/plain in the repository of src, dated MOMENT by borg itself."""
-        name = moment.strftime(NAME_FORMAT)
+        """An archive of src/plain in the repository of src, dated MOMENT by borg
+        itself and named the way versions before numbers named it."""
+        name = moment.strftime(OLD_NAME_FORMAT)
         self.borg("create", "--timestamp", moment.strftime("%Y-%m-%dT%H:%M:%S"),
                   f"{self.repository()}::{name}", ".", cwd=self.source / "plain")
         return name
@@ -160,12 +178,6 @@ class Sandbox:
         export(ROOT, OLD_COMMIT, old)
         export(ROOT / "lib", OLD_LIB_COMMIT, old / "lib")
         return old / "dedupctl"
-
-
-def wait_for_a_new_second(taken: set[str]) -> None:
-    """Names have one-second resolution: wait until a create would not hit one in TAKEN."""
-    while datetime.now(timezone.utc).strftime(NAME_FORMAT) in taken:
-        time.sleep(0.05)
 
 
 @pytest.fixture
