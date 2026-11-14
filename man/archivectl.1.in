@@ -127,7 +127,11 @@ it, which the fingerprint it printed shows, and
 .B create
 ends with borg's status, after the parent below; a
 .B SOURCE_DIR
-that is no directory ends it with status 1, also after the parent.
+that is no directory or cannot be entered and read ends it with status 1,
+also after the parent and also in the log; borg does not run then.
+A file borg names that way is logged with its own bytes, which borg keeps
+in its warning about the file when it shows a byte that is not UTF\-8 as
+.BR ? .
 .B \-n
 runs
 .B borg create \-\-dry\-run \-\-list
@@ -220,6 +224,11 @@ without loss: a path in the second archive only is added, one in the first
 only removed, and one in both whose type, link target or content
 .RB ( "borg list {sha256}" )
 differs is modified.
+borg lists a hard link to an earlier item with that item's path and no
+content, so a hard link's content is the item's it links to.
+A failing
+.B borg list
+there ends the run with borg's status.
 When borg's records and the paths found that way are not as many, the
 comparison is refused with status 1; one with
 .B \-\-scratch
