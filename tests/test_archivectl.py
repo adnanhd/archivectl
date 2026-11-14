@@ -544,3 +544,83 @@ def test_the_log_names_files_borg_could_not_read_and_not_its_messages(sandbox: S
     text = next((sandbox.home / ".local/state/archivectl").iterdir()).read_text()
     assert "C dir/secret could not be read" in text
     assert "changed while borg read it" not in text and "Errno" not in text
+
+
+def name_of(box: Sandbox, raw: bytes) -> Path:
+    return box.source / os.fsdecode(raw)
+
+
+def test_both_diffs_agree_on_hard_links_whose_names_show_alike(sandbox: Sandbox) -> None:
+    name_of(sandbox, b"a\xfe").write_text("lone\n")
+    (sandbox.source / "c").write_text("c\n")
+    os.link(sandbox.source / "c", name_of(sandbox, b"a\xff"))
+    (sandbox.source / "m").mkdir()
+    (sandbox.source / "q").mkdir()
+    (sandbox.source / "m/a.txt").write_text("m\n")
+    os.link(sandbox.source / "m/a.txt", sandbox.source / "q/why?.txt")
+    sandbox.initialise()
+    first = record_names(sandbox.run_ok("create").stdout)[0]
+    os.link(name_of(sandbox, b"a\xfe"), sandbox.source / "u")
+    for name in ("c", "m/a.txt"):
+        with open(sandbox.source / name, "a") as changed:
+            changed.write("more\n")
+    expected = {("c", "modified"), ("u", "added"), (os.fsdecode(b"a\xff"), "modified"), ("m/a.txt", "modified"),
+                ("q/why?.txt", "modified")}
+    assert changes(sandbox.run_ok("diff", "--scratch", str(sandbox.root / "tmp"), first).stdout) == expected
+    wait_for_a_new_second({first})
+    second = record_names(sandbox.run_ok("create").stdout)[0]
+    assert changes(sandbox.run_ok("diff", first, second).stdout) == expected
+
+
+def archives_with_names_that_show_alike(box: Sandbox) -> tuple[str, str]:
+    """Two archives in which only a\\xff of a\\xfe and a\\xff changed."""
+    for raw in (b"a\xfe", b"a\xff"):
+        name_of(box, raw).write_text("old\n")
+    box.initialise()
+    first = record_names(box.run_ok("create").stdout)[0]
+    name_of(box, b"a\xff").write_text("changed\n")
+    wait_for_a_new_second({first})
+    return first, record_names(box.run_ok("create").stdout)[0]
+
+
+@pytest.mark.parametrize("lookup, status", [("printf same; exit 0", 1), ("exit 2", 2)])
+def test_diff_of_names_that_show_alike_refuses_or_fails_with_borg(sandbox: Sandbox, lookup: str, status: int) -> None:
+    first, second = archives_with_names_that_show_alike(sandbox)
+    borg = shutil.which("borg")
+    shim(sandbox, "borg", f'case "$*" in *pf:*) {lookup} ;; esac\nexec {borg} "$@"\n')
+    result = sandbox.run("diff", first, second)
+    assert (result.returncode, result.stdout) == (status, "")
+    assert ("cannot tell which is modified" in result.stderr) == (status == 1)
+
+
+def test_a_failing_listing_of_raw_paths_ends_with_borg_status(sandbox: Sandbox) -> None:
+    first, second = archives_with_names_that_show_alike(sandbox)
+    borg = shutil.which("borg")
+    shim(sandbox, "borg", f'case "$*" in *bpath*) exit 2 ;; esac\nexec {borg} "$@"\n')
+    result = sandbox.run("diff", first, second)
+    assert (result.returncode, result.stdout) == (2, "")
+
+
+def test_files_borg_could_not_read_are_named_with_their_own_bytes(sandbox: Sandbox) -> None:
+    for raw in (b"x\xfe", b"x\xff"):
+        name_of(sandbox, raw).write_text("unreadable\n")
+        name_of(sandbox, raw).chmod(0)
+    sandbox.initialise()
+    result = sandbox.run("create")
+    assert result.returncode == 0
+    stderr = os.fsencode(result.stderr)
+    assert b"x\xfe" in stderr and b"x\xff" in stderr and b"\xed\xb3" not in stderr
+    log = next((sandbox.home / ".local/state/archivectl").iterdir()).read_bytes()
+    assert b"x\xfe could not be read" in log and b"x\xff could not be read" in log
+
+
+def test_a_source_borg_cannot_enter_is_reported_as_such(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    (sandbox.source / "closed").mkdir(mode=0o600)
+    with open(sandbox.source / CONFIG, "a") as config:
+        config.write("SOURCE_DIR=./closed\n")
+    result = sandbox.run("create")
+    assert (result.returncode, result.stdout) == (1, "")
+    assert "no directory ./closed it can read" in result.stderr and "borg status" not in result.stderr
+    log = next((sandbox.home / ".local/state/archivectl").iterdir()).read_text()
+    assert "no directory ./closed it can read" in log
