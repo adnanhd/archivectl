@@ -24,6 +24,8 @@ archivectl restore --to /tmp/old "$(archivectl list --last 1 | cut -f1)" notes.t
 
 Standard output carries records only, one per line, tab-separated, name first; messages, summaries and borg's own output go to standard error, and an empty answer prints nothing. Every command that writes takes `-n`, which reports what it would do and writes nothing. A write's log goes to `${XDG_STATE_HOME:-~/.local/state}/archivectl/<repository>.log`. `delete` does not run `borg compact`, which frees the space.
 
+`create` keeps an archive borg finished with warnings (status 1 or 100 to 127): borg names the files it could not read (`E`) or that changed while it read them (`C`) on standard error, `create` logs them and ends with status 0. A name that is taken is refused, and a failed create deletes only an archive its own borg committed.
+
 A path in a record writes a backslash, tab or newline as `\\`, `\t` or `\n`.
 
 `man archivectl` documents every command and option, and `man 5 archivectl.borgbackup` the configuration file.
