@@ -101,7 +101,9 @@ archive_dates() {
 
 # require_archive NAME...: die unless every NAME names an archive
 require_archive() {
-    require_known "$@" < <(archive_dates | cut -f1)
+    local known
+    known=$(archive_dates | cut -f1)
+    require_known "$@" <<<"$known"
 }
 
 # with_sizes: every record "name<TAB>date<TAB>borg id" read on stdin, the
