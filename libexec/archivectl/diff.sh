@@ -33,31 +33,73 @@ run() {
 
 # archive_diff A B: one record per path whose content or type differs from
 # archive A to archive B; borg diff writes a byte that is not UTF-8 as ?, so
-# a path holding ? is matched to its bytes in the listings of A and B
+# the records of paths holding ? are made from the listings of A and B
 archive_diff() {
-    local records
-    records=$(borg diff --json-lines "$BORG_REPO::$1" "$2" | LC_ALL=C awk "$AWK_ESCAPE$AWK_CODE_POINTS$AWK_BORG_DIFF")
+    local records line resolved
+    records=$(borg diff --json-lines "$BORG_REPO::$1" "$2" | LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON$AWK_BORG_DIFF")
     [ -n "$records" ] || return 0
     if ! LC_ALL=C grep -aq '?' <<<"$records"; then
         printf '%s\n' "$records"
         return 0
     fi
-    { raw_paths "$1" | sed 's/^/1\t/'; raw_paths "$2" | sed 's/^/2\t/'; printf '%s\n' "$records" | sed 's/^/D\t/'; } |
-        LC_ALL=C awk -F '\t' "$AWK_RAW_PATHS"
+    resolved=$({ raw_paths "$1" | sed 's/^/1\t/'; raw_paths "$2" | sed 's/^/2\t/'
+                 printf '%s\n' "$records" | sed 's/^/D\t/'; } | LC_ALL=C awk -F '\t' "$AWK_RAW_PATHS" |
+        while IFS= read -r line; do
+            case "$line" in
+                CHECK$'\t'*) resolve_shown "$1" "$2" "${line#CHECK$'\t'}" ;;
+                *) printf '%s\n' "$line" ;;
+            esac
+        done)
+    printf '%s\n' "$resolved"
+}
+
+# resolve_shown A B CHECK: the records of the paths borg diff shows the same
+# way, CHECK being "shown<TAB>change<TAB>count<TAB>candidate...": each
+# candidate is in B only (added), in A only (removed), or in both and
+# different (modified); unless they are as many as borg's records, it dies
+resolve_shown() {
+    local candidate
+    local -a fields chosen=()
+    IFS=$'\t' read -r -a fields <<<"$3"
+    for candidate in "${fields[@]:3}"; do
+        if [ "${fields[1]}" != modified ] || item_differs "$1" "$2" "$candidate"; then
+            chosen+=("$candidate")
+        fi
+    done
+    [ ${#chosen[@]} -eq "${fields[2]}" ] ||
+        die "borg shows several paths as ${fields[0]} and cannot tell which is ${fields[1]}; compare with diff --scratch."
+    for candidate in "${chosen[@]}"; do
+        printf '%s\t%s\n' "$candidate" "${fields[1]}"
+    done
+}
+
+# item_differs A B PATH: whether item PATH, escaped like a record, differs in
+# type, link target or content from archive A to archive B
+item_differs() {
+    local raw
+    printf -v raw '%b' "$3"
+    [ "$(item_print "$1" "$raw")" != "$(item_print "$2" "$raw")" ]
+}
+
+# item_print NAME PATH: type, link target and SHA-256 of item PATH of archive NAME
+item_print() {
+    PYTHONIOENCODING=unicode_escape borg list --format '{type}{TAB}{linktarget}{TAB}{sha256}{NUL}' \
+        "$BORG_REPO::$1" "pf:$2"
 }
 
 # raw_paths NAME: the path of every item of archive NAME, in borg's order,
 # its bytes as they are but a backslash, tab or newline escaped
 raw_paths() {
     PYTHONIOENCODING=unicode_escape borg list --format '{bpath}{NUL}' "$BORG_REPO::$1" |
-        LC_ALL=C awk "$AWK_ESCAPE$AWK_CODE_POINTS$AWK_BORG_PATHS"
+        LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON$AWK_BORG_PATHS"
 }
 
 # An awk program, run with LC_ALL=C, that reads the paths of archive A
 # ("1<TAB>path"), of archive B ("2<TAB>path") and the records of borg diff
-# ("D<TAB>path<TAB>change"), and prints each record with its path's own
-# bytes: the first path not yet used that borg shows the same way and that
-# is in B only (added), in A only (removed) or in both (modified).
+# ("D<TAB>path<TAB>change"). It prints a record without ? as it is, and for
+# each path and change of the others "CHECK<TAB>path<TAB>change<TAB>count"
+# and every path borg shows that way that is in B only (added), in A only
+# (removed) or in both (modified).
 AWK_RAW_PATHS='
 function shown(s,    out, i, n, b, c, need, j, ok) {
     if (s !~ /[\200-\377]/) return s
@@ -80,32 +122,20 @@ BEGIN { for (i = 1; i < 256; i++) byte[sprintf("%c", i)] = i }
 $1 == "1" { first[$2]; order[++n] = $2; next }
 $1 == "2" { second[$2]; if (!($2 in first)) order[++n] = $2; next }
 index($2, "?") == 0 { print $2 "\t" $3; next }
-{
-    for (i = 1; i <= n; i++) {
-        p = order[i]
-        if (p in used) continue
-        if (!(p in look)) look[p] = shown(p)
-        if (look[p] != $2) continue
-        if ($3 == "added" ? (p in second) && !(p in first) : $3 == "removed" ? (p in first) && !(p in second) : (p in first) && (p in second)) {
-            used[p]; print p "\t" $3; next
+{ key = $2 "\t" $3; if (!(key in count)) keys[++k] = key; count[key]++ }
+END {
+    for (j = 1; j <= k; j++) {
+        split(keys[j], part, "\t")
+        line = "CHECK\t" part[1] "\t" part[2] "\t" count[keys[j]]
+        for (i = 1; i <= n; i++) {
+            p = order[i]
+            if (!(p in look)) look[p] = shown(p)
+            if (look[p] != part[1]) continue
+            if (part[2] == "added" ? (p in second) && !(p in first) : part[2] == "removed" ? (p in first) && !(p in second) : (p in first) && (p in second))
+                line = line "\t" p
         }
+        print line
     }
-    print $2 "\t" $3
-}'
-
-# Awk functions for the programs below: hex reads up to 8 hex digits, utf8
-# writes a code point as UTF-8.
-AWK_CODE_POINTS='
-function hex(h,    i, v) {
-    v = 0
-    for (i = 1; i <= length(h); i++) v = v * 16 + index("0123456789abcdef", tolower(substr(h, i, 1))) - 1
-    return v
-}
-function utf8(c) {
-    if (c < 128) return sprintf("%c", c)
-    if (c < 2048) return sprintf("%c%c", 192 + int(c / 64), 128 + c % 64)
-    if (c < 65536) return sprintf("%c%c%c", 224 + int(c / 4096), 128 + int(c / 64) % 64, 128 + c % 64)
-    return sprintf("%c%c%c%c", 240 + int(c / 262144), 128 + int(c / 4096) % 64, 128 + int(c / 64) % 64, 128 + c % 64)
 }'
 
 # An awk program, run with LC_ALL=C, that turns the output of borg list
@@ -139,21 +169,6 @@ AWK_BORG_PATHS='
 # of type (the first character of the mode); borg writes the path as a JSON
 # string, a byte that is not UTF-8 as ?.
 AWK_BORG_DIFF='
-function unjson(s,    out, i, c, code) {
-    out = ""
-    for (i = 1; i <= length(s); i++) {
-        c = substr(s, i, 1)
-        if (c != "\\") { out = out c; continue }
-        c = substr(s, ++i, 1)
-        if (c != "u") { out = out (c == "n" ? "\n" : c == "t" ? "\t" : c == "r" ? "\r" : c == "b" ? "\b" : c == "f" ? "\f" : c); continue }
-        code = hex(substr(s, i + 1, 4)); i += 4
-        if (code >= 55296 && code < 56320 && substr(s, i + 1, 2) == "\\u") {
-            code = 65536 + (code - 55296) * 1024 + hex(substr(s, i + 3, 4)) - 56320; i += 6
-        }
-        out = out utf8(code)
-    }
-    return out
-}
 {
     if (!match($0, /"path": "([^"\\]|\\.)*"}$/)) next
     path = substr($0, RSTART + 9, RLENGTH - 11); changes = substr($0, 1, RSTART - 1)

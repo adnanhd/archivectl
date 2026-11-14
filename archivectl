@@ -94,6 +94,36 @@ EOF
     exit "${1:-0}"
 }
 
+# Awk functions for the programs that read borg's JSON: hex reads up to 8
+# hex digits, utf8 writes a code point as UTF-8, unjson decodes a JSON string.
+AWK_JSON='
+function hex(h,    i, v) {
+    v = 0
+    for (i = 1; i <= length(h); i++) v = v * 16 + index("0123456789abcdef", tolower(substr(h, i, 1))) - 1
+    return v
+}
+function utf8(c) {
+    if (c < 128) return sprintf("%c", c)
+    if (c < 2048) return sprintf("%c%c", 192 + int(c / 64), 128 + c % 64)
+    if (c < 65536) return sprintf("%c%c%c", 224 + int(c / 4096), 128 + int(c / 64) % 64, 128 + c % 64)
+    return sprintf("%c%c%c%c", 240 + int(c / 262144), 128 + int(c / 4096) % 64, 128 + int(c / 64) % 64, 128 + c % 64)
+}
+function unjson(s,    out, i, c, code) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c != "\\") { out = out c; continue }
+        c = substr(s, ++i, 1)
+        if (c != "u") { out = out (c == "n" ? "\n" : c == "t" ? "\t" : c == "r" ? "\r" : c == "b" ? "\b" : c == "f" ? "\f" : c); continue }
+        code = hex(substr(s, i + 1, 4)); i += 4
+        if (code >= 55296 && code < 56320 && substr(s, i + 1, 2) == "\\u") {
+            code = 65536 + (code - 55296) * 1024 + hex(substr(s, i + 3, 4)) - 56320; i += 6
+        }
+        out = out utf8(code)
+    }
+    return out
+}'
+
 # archive_dates: "name<TAB>date<TAB>borg id" of every archive, oldest first
 archive_dates() {
     borg list --format '{barchive}{TAB}{start:%Y-%m-%dT%H:%M:%S}{TAB}{id}{NL}' "$BORG_REPO"
