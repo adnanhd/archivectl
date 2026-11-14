@@ -19,8 +19,9 @@ OLD_FILES = $(BINDIR)/$(OLD_PROG) $(PREFIX)/lib/$(OLD_PROG) $(PREFIX)/libexec/$(
 
 install: $(PROG)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(LIBDIR)
-	sed 's|^INSTALLED_MODULE_DIR=.*|INSTALLED_MODULE_DIR="$(LIBDIR)"|' $(PROG) >$(DESTDIR)$(BINDIR)/$(PROG)
-	chmod 755 $(DESTDIR)$(BINDIR)/$(PROG)
+	sed 's|^INSTALLED_MODULE_DIR=.*|INSTALLED_MODULE_DIR="$(LIBDIR)"|' $(PROG) >$(DESTDIR)$(BINDIR)/.$(PROG).new
+	chmod 755 $(DESTDIR)$(BINDIR)/.$(PROG).new
+	mv -f $(DESTDIR)$(BINDIR)/.$(PROG).new $(DESTDIR)$(BINDIR)/$(PROG)
 	install -m644 lib/common.sh libexec/$(PROG)/*.sh $(DESTDIR)$(LIBDIR)
 	install -Dm644 completions/bash/$(PROG).bash $(DESTDIR)$(BASH_COMPLETIONS_DIR)/$(PROG)
 	install -Dm644 completions/fish/$(PROG).fish $(DESTDIR)$(FISH_COMPLETIONS_DIR)/$(PROG).fish
@@ -39,7 +40,7 @@ uninstall:
 
 # list-old prints the installed dedupctl files, one per line; uninstall-old removes them
 list-old:
-	@for path in $(addprefix $(DESTDIR),$(OLD_FILES)); do if [ -e "$$path" ]; then echo "$$path"; fi; done
+	@for path in $(addprefix $(DESTDIR),$(OLD_FILES)); do if [ -e "$$path" ] || [ -L "$$path" ]; then echo "$$path"; fi; done
 
 uninstall-old:
 	rm -rf $(addprefix $(DESTDIR),$(OLD_FILES))
