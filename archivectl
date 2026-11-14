@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# archivectl - encrypted, compressed Borg archives of a directory tree
+#
+# Commands: initialise, create, list, delete, restore, diff, check
+# Run 'archivectl --help' for more information.
+#
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+SCRIPT_PATH="$(realpath "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+PROG=archivectl
+CONFIG=.borgbackup
+
+# In the source tree the modules are in libexec/ and the library in lib/;
+# installed, both are in PREFIX/lib/archivectl/.
+if [ -d "$SCRIPT_DIR/libexec/$PROG" ]; then
+    MODULE_DIR="$SCRIPT_DIR/libexec/$PROG"
+    LIB_DIR="$SCRIPT_DIR/lib"
+else
+    MODULE_DIR="$(dirname "$SCRIPT_DIR")/lib/$PROG"
+    LIB_DIR="$MODULE_DIR"
+fi
+source "$LIB_DIR/common.sh"
+
+BORG_BACKUP_ROOT="${BORG_BACKUP_ROOT:-$HOME/.borg_backups}"
+
+usage() {
+    cat <<'EOF'
+usage: archivectl <command> [<options>]
+
+archivectl - encrypted, compressed Borg archives of a directory tree
+
+Commands:
+  initialise [-n] [<path>]
+      Make <path>, or the current directory, a backup source.
+      It writes the .borgbackup of the directory and initialises its Borg repository, encrypted with repokey.
+      init is an alias.
+      Options:
+        -n, --dry-run : Report what would be written and write nothing.
+
+  create [-n]
+      Archive the source into a new archive and print its record.
+      The archive is compressed with lz4.
+      A parent directory's repository, if there is one, is then archived with the same options.
+      Options:
+        -n, --dry-run : Report what would be archived and write nothing, here or in a parent repository.
+
+  list [--older N] [--newer N] [--first N] [--last N]
+      Print one record per archive, oldest first: name, date, original size in bytes.
+      Options:
+        --older N : Only the archives older than N days.
+        --newer N : Only the archives newer than N days.
+        --first N : Then only the oldest N of those.
+        --last N  : Then only the newest N of those.
+
+  delete [-n]
+      Delete the archives whose names begin the lines read on standard input.
+      It reads the records list prints, and does nothing without input.
+      Options:
+        -n, --dry-run : Report what would be deleted and delete nothing.
+
+  restore [-n] [--to <dir> | --mount <dir>] <name> [<path>...]
+      Extract archive <name>, or only the given paths in it, into the source directory.
+      Options:
+        -n, --dry-run   : Report what would be extracted or mounted and write nothing.
+        --to <dir>      : Extract into <dir> instead.
+        --mount <dir>   : Mount the archive at <dir> instead.
+
+  diff <name> [<name2>]
+      Print one record per path whose content differs from archive <name> to <name2>.
+      Without <name2> the live source is compared: path, then added, removed or modified.
+
+  check
+      Check the integrity of the repository with borg check.
+
+Common options:
+  -h, --help     Show this help message and exit.
+
+Every other option belongs to one command and goes after it.
+EOF
+    exit "${1:-0}"
+}
+
+# archive_dates: "name<TAB>date<TAB>borg id" of every archive, oldest first
+archive_dates() {
+    borg list --format '{barchive}{TAB}{start:%Y-%m-%dT%H:%M:%S}{TAB}{id}{NL}' "$BORG_REPO"
+}
+
+# with_sizes: every record "name<TAB>date<TAB>borg id" read on stdin, the
+# borg id replaced by the archive's original size in bytes
+with_sizes() {
+    local records info
+    records=$(cat)
+    [ -n "$records" ] || return 0
+    info=$(borg info --json --glob-archives '*' "$BORG_REPO")
+    awk -F '\t' -v OFS='\t' '
+        NR == FNR {
+            if ($0 ~ /^ *"id": "/) { id = $0; gsub(/^ *"id": "|",?$/, "", id) }
+            if ($0 ~ /^ *"original_size": /) { size = $0; gsub(/[^0-9]/, "", size); sizes[id] = size }
+            next
+        }
+        { print $1, $2, sizes[$3] }
+    ' <(printf '%s\n' "$info") <(printf '%s\n' "$records")
+}
+
+[ $# -ge 1 ] || usage 1 >&2
+COMMAND="$1"
+shift
+case "$COMMAND" in
+    init|initialise) source "$MODULE_DIR/initialise.sh" ;;
+    create|list|delete|restore|diff|check) source "$MODULE_DIR/$COMMAND.sh" ;;
+    -h|--help) usage 0 ;;
+    *)
+        echo "$PROG: unknown command '$COMMAND'" >&2
+        usage 1 >&2
+        ;;
+esac
+run "$@"
