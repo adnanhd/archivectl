@@ -29,5 +29,8 @@ complete -c archivectl -n '__fish_seen_subcommand_from restore' -s h -l help -d 
 complete -c archivectl -n '__fish_seen_subcommand_from diff' -l scratch -r -d 'Extract archive <name> under <dir> to compare it with the live source; that comparison needs it.'
 complete -c archivectl -n '__fish_seen_subcommand_from diff' -s h -l help -d 'Show this help message and exit.'
 complete -c archivectl -n '__fish_seen_subcommand_from check' -s h -l help -d 'Show this help message and exit.'
-complete -c archivectl -n '__fish_seen_subcommand_from init' -s n -l dry-run
+complete -c archivectl -n '__fish_seen_subcommand_from init' -s n -l dry-run -d 'Report what would be written and write nothing.'
 complete -c archivectl -n '__fish_seen_subcommand_from init' -s h -l help -d 'Show this help message and exit.'
+complete -c archivectl -n '__fish_seen_subcommand_from initialise' -F
+complete -c archivectl -n '__fish_seen_subcommand_from restore' -F
+complete -c archivectl -n '__fish_seen_subcommand_from init' -F

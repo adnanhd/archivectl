@@ -691,8 +691,9 @@ def man_page(tool: Tool) -> str:
 
 def comp_opts(tool: Tool, c: Command) -> list[Opt]:
     """What a completion offers after C: the options the code parses,
-    with the help text's words for them."""
-    helped = {n: o for o in tool.help_opts(c) + tool.global_help() for n in o.names}
+    with the help text's words for them (an alias's from its target)."""
+    source = next((t for t in tool.commands if c.alias and t.name == c.alias[0]), c)
+    helped = {n: o for o in tool.help_opts(source) + tool.global_help() for n in o.names}
     out = []
     for o in c.opts:
         h = next((helped[n] for n in o.names if n in helped), None)
@@ -795,6 +796,14 @@ def fish_opt(prog: str, o: Opt, cond: str) -> str:
     return " ".join(parts)
 
 
+def takes_path(tool: Tool, c: Command) -> bool:
+    """Whether C's usage line names a <path>, <dir> or <file> of its own,
+    not as the value of an option (an alias's from its target)."""
+    source = next((t for t in tool.commands if c.alias and t.name == c.alias[0]), c)
+    usage = source.overview[0] if source.overview else ""
+    return bool(re.search(r"<(?:path|dir|file)", re.sub(r"%s\s+<[^>]*>" % OPT, "", usage)))
+
+
 def fish(tool: Tool) -> str:
     out = [f"# fish completion for {tool.prog}", f"# {NOTE}", ""]
     if tool.commands:
@@ -806,6 +815,8 @@ def fish(tool: Tool) -> str:
         for c in tool.commands:
             out += [fish_opt(tool.prog, o, f"__fish_seen_subcommand_from {c.name}")
                     for o in comp_opts(tool, c)]
+        out += [f"complete -c {tool.prog} -n {fish_q('__fish_seen_subcommand_from ' + c.name)} -F"
+                for c in tool.commands if takes_path(tool, c)]
     else:
         pg = positional_glob(tool)
         out += [fish_opt(tool.prog, o, "") for o in tool.global_opts]
