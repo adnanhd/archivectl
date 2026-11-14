@@ -358,6 +358,13 @@ class Tool:
             c.alias = self._alias(text)
             c.help = None if c.alias else help_of(text)
             c.opts = self._module_opts(text)
+        # an alias in the dispatcher: `init|initialise) source "$DIR/initialise.sh"'
+        for m in re.finditer(r'^\s*([\w-]+(?:\|[\w-]+)+)\)\s*(?:source|\.)\s+"[^"]*/([\w-]+)\.sh"',
+                             self.main, re.M):
+            for name in m.group(1).split("|"):
+                if name not in cmds and m.group(2) in cmds:
+                    cmds[name] = Command(name, alias=(m.group(2), []))
+                    names.append(name)
         # an overview entry: a line at its section's indent naming a command
         order: list[str] = []
         for _, lines in sections(self.overview)[1]:
