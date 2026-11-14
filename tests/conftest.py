@@ -107,7 +107,7 @@ class Sandbox:
 
     def run(self, *args: str, cwd: Path | None = None, stdin: str = "", tool: Path = TOOL) -> Result:
         completed = subprocess.run([str(tool), *args], cwd=cwd or self.source, input=stdin,
-                                   capture_output=True, text=True, env=self.env, timeout=300)
+                                   capture_output=True, text=True, errors="surrogateescape", env=self.env, timeout=300)
         return Result(completed.returncode, completed.stdout, completed.stderr)
 
     def run_ok(self, *args: str, cwd: Path | None = None, stdin: str = "", tool: Path = TOOL) -> Result:

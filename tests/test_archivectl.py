@@ -243,17 +243,50 @@ def newest(box: Sandbox, directory: Path | None = None) -> str:
     return record_names(box.run_ok("list", "--last", "1", cwd=directory).stdout)[0]
 
 
-def test_create_keeps_no_incomplete_archive_and_still_creates_in_the_parent(sandbox: Sandbox) -> None:
+def test_create_keeps_an_archive_with_files_borg_could_not_read(sandbox: Sandbox) -> None:
     inner = sandbox.source / "inner"
     sandbox.initialise()
     sandbox.initialise(inner)
-    with open(sandbox.source / CONFIG, "a") as config:
-        config.write("EXCLUDES=(inner/locked)\n")
     (inner / "locked").write_text("unreadable\n")
     (inner / "locked").chmod(0)
     result = sandbox.run("create", cwd=inner)
-    assert (result.returncode, result.stdout) == (105, "")
-    assert sandbox.run_ok("list", cwd=inner).stdout == ""
+    assert result.returncode == 0 and "E locked" in result.stderr
+    assert record_names(result.stdout) == [newest(sandbox, inner)]
+    logs = (sandbox.home / ".local/state/archivectl").iterdir()
+    assert any("locked could not be read" in log.read_text(errors="replace") for log in logs)
+    assert len(record_names(sandbox.run_ok("list").stdout)) == 1
+
+
+def shim(box: Sandbox, name: str, script: str) -> None:
+    """A command NAME in front of the real one on the sandbox's PATH."""
+    directory = box.root / "shims"
+    directory.mkdir(exist_ok=True)
+    (directory / name).write_text("#!/bin/sh\n" + script)
+    (directory / name).chmod(0o755)
+    box.env["PATH"] = f"{directory}:{box.env['PATH']}"
+
+
+def test_create_refuses_a_name_that_is_taken(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    shim(sandbox, "date", f'case "$1" in +%Y-%m-%d_%H:%M:%S) echo 2030-01-01_00:00:00 ;; '
+                          f'*) exec {shutil.which("date")} "$@" ;; esac\n')
+    first = sandbox.run_ok("create").stdout
+    result = sandbox.run("create")
+    assert (result.returncode, result.stdout) == (1, "") and "exists already" in result.stderr
+    assert sandbox.run_ok("list").stdout == first
+
+
+def test_a_failed_create_deletes_only_the_archive_it_made(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    borg = shutil.which("borg")
+    shim(sandbox, "borg", f'if [ "$1" = create ]; then {borg} "$@"; exit 2; fi\nexec {borg} "$@"\n')
+    result = sandbox.run("create")
+    assert (result.returncode, result.stdout) == (2, "")
+    assert sandbox.run_ok("list").stdout == ""
+    # another run's archive of the same name, which this run's borg did not print
+    shim(sandbox, "borg", f'if [ "$1" = create ]; then {borg} "$@" >/dev/null 2>&1; exit 30; fi\nexec {borg} "$@"\n')
+    result = sandbox.run("create")
+    assert result.returncode == 30
     assert len(record_names(sandbox.run_ok("list").stdout)) == 1
 
 
@@ -372,3 +405,110 @@ def test_completions_know_the_init_alias() -> None:
               f'COMP_CWORD=2; _{TOOL.name}; printf "%s\\n" "${{COMPREPLY[@]}}"')
     offered = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout.split()
     assert {"-n", "--dry-run"} <= set(offered)
+
+
+def test_both_diffs_give_the_bytes_of_a_name_that_is_not_utf8(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    first = record_names(sandbox.run_ok("create").stdout)[0]
+    for name in (b"\xff\xfe-bytes", b"\xff-x", b"?-x", b"tab\tname"):
+        (sandbox.source / os.fsdecode(name)).write_text("new\n")
+    expected = {(os.fsdecode(b"\xff\xfe-bytes"), "added"), (os.fsdecode(b"\xff-x"), "added"), ("?-x", "added"),
+                ("tab\\tname", "added")}
+    live = sandbox.run_ok("diff", "--scratch", str(sandbox.root / "tmp"), first).stdout
+    assert changes(live) == expected
+    wait_for_a_new_second({first})
+    second = record_names(sandbox.run_ok("create").stdout)[0]
+    assert changes(sandbox.run_ok("diff", first, second).stdout) == expected
+
+
+def test_diff_refuses_a_scratch_directory_inside_the_source(populated: Sandbox, listings: dict[Path, str]) -> None:
+    name = record_names(listings[populated.source])[0]
+    before = populated.state()
+    for scratch in (".", "plain"):
+        result = populated.run("diff", "--scratch", scratch, name)
+        assert (result.returncode, result.stdout) == (2, "") and "outside the source" in result.stderr
+    assert populated.state() == before
+
+
+@pytest.mark.parametrize("args", [["diff", "{first}", "{first}"], ["restore", "-n", "{first}"], ["delete", "-n"]])
+def test_a_failing_borg_list_ends_with_borg_status(populated: Sandbox, listings: dict[Path, str],
+                                                   args: list[str]) -> None:
+    first = record_names(listings[populated.source])[0]
+    populated.env["BORG_PASSPHRASE"] = "wrong"
+    try:
+        result = populated.run(*[arg.format(first=first) for arg in args], stdin=first + "\n")
+    finally:
+        populated.env["BORG_PASSPHRASE"] = "throwaway"
+    assert (result.returncode, result.stdout) == (2, "") and "no such id" not in result.stderr
+
+
+def test_a_long_path_keeps_its_names_under_name_max(sandbox: Sandbox) -> None:
+    directory = sandbox.root / "w"
+    while len(os.fsencode(directory)) < 230:
+        directory = directory / "dd"
+    directory.mkdir(parents=True)
+    (directory / "f.txt").write_text("deep\n")
+    sandbox.initialise(directory)
+    sandbox.run_ok("create", cwd=directory)
+    names = [path.name for path in sandbox.backups.iterdir()]
+    names += [path.name for path in (sandbox.home / ".local/state/archivectl").iterdir()]
+    assert len(names) == 2 and max(len(os.fsencode(name)) for name in names) <= 255
+
+
+MAKE_DIRECTORIES = {"BINDIR": "bin", "LIBDIR": f"lib/{TOOL.name}", "BASH_COMPLETIONS_DIR": "share/bash-completion/completions",
+                    "FISH_COMPLETIONS_DIR": "share/fish/vendor_completions.d", "ZSH_COMPLETIONS_DIR": "share/zsh/site-functions",
+                    "MAN1DIR": "share/man/man1", "MAN5DIR": "share/man/man5", "OLD_FISH_COMPLETIONS_DIR": "old-fish"}
+OLD_PROG, CONFIG_NAME = "dedupctl", "borgbackup"
+
+
+def make(target: str, prefix: Path, **overrides: str) -> subprocess.CompletedProcess[str]:
+    """make TARGET with PREFIX and every directory the Makefile writes inside PREFIX."""
+    directories = {"PREFIX": str(prefix), **{name: str(prefix / path) for name, path in MAKE_DIRECTORIES.items()},
+                   **overrides}
+    assert all(Path(path).is_relative_to(prefix.parent) for path in directories.values())
+    env = {name: value for name, value in os.environ.items()
+           if name not in directories and name not in ("DESTDIR", "MAKEFLAGS")}
+    return subprocess.run(["make", "-s", target, "DESTDIR=", *(f"{name}={path}" for name, path in directories.items())],
+                          cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+
+
+def test_install_replaces_a_link_and_not_what_it_points_at(tmp_path: Path) -> None:
+    prefix, checkout = tmp_path / "prefix", tmp_path / "checkout-copy"
+    shutil.copy(TOOL, checkout)
+    (prefix / "bin").mkdir(parents=True)
+    (prefix / "bin" / TOOL.name).symlink_to(checkout)
+    assert make("install", prefix, LIBDIR=str(tmp_path / "elsewhere")).returncode == 0
+    installed = prefix / "bin" / TOOL.name
+    assert not installed.is_symlink() and checkout.read_bytes() == TOOL.read_bytes()
+    result = subprocess.run([str(installed), "list"], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 1 and f"no {CONFIG}" in result.stderr
+
+
+def test_list_old_shows_what_uninstall_old_removes(tmp_path: Path) -> None:
+    prefix = tmp_path / "prefix"
+    assert make("install", prefix).returncode == 0
+    installed = sorted(path for path in prefix.rglob("*") if not path.is_dir())
+    old = [prefix / "bin" / OLD_PROG, prefix / "lib" / OLD_PROG, prefix / "libexec" / OLD_PROG,
+           prefix / "old-fish" / f"{OLD_PROG}.fish", prefix / f"share/man/man1/{OLD_PROG}.1",
+           prefix / f"share/man/man5/{OLD_PROG}.{CONFIG_NAME}.5"]
+    for path in old:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("old\n")
+    dangling = prefix / "share/bash-completion/completions" / OLD_PROG
+    dangling.symlink_to(tmp_path / "gone")
+    assert sorted(make("list-old", prefix).stdout.splitlines()) == sorted(map(str, old + [dangling]))
+    assert make("uninstall-old", prefix).returncode == 0
+    assert make("list-old", prefix).stdout == ""
+    assert sorted(path for path in prefix.rglob("*") if not path.is_dir()) == installed
+
+
+def test_fish_completes_directories_after_initialise(tmp_path: Path) -> None:
+    if shutil.which("fish") is None:
+        pytest.skip("fish is not installed")
+    (tmp_path / "subdir").mkdir()
+    script = (f"source {ROOT}/completions/fish/{TOOL.name}.fish; "
+              f"complete -C '{TOOL.name} initialise su'; complete -C '{TOOL.name} init su'")
+    env = {**os.environ, "HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path), "XDG_DATA_HOME": str(tmp_path)}
+    offered = subprocess.run(["fish", "--no-config", "-c", script], cwd=tmp_path, env=env,
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert offered == ["subdir/", "subdir/"]
