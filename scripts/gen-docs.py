@@ -369,9 +369,11 @@ class Tool:
         order: list[str] = []
         for _, lines in sections(self.overview)[1]:
             body = [ln for ln in lines if ln.strip()]
-            if not body:
+            named = [indent(ln) for ln in body if ln.split()[0] in cmds]
+            if not named:
                 continue
-            base = min(indent(ln) for ln in body)
+            # the indent of the lines naming a command, other text around them aside
+            base = min(named)
             cur: Command | None = None
             for ln in body:
                 word = ln.strip().split()[0]
@@ -454,6 +456,16 @@ class Tool:
         for head, lines in sections(self.overview)[1]:
             if re.search(r"global|common", head, re.I):
                 out += [o for e in entries(lines) for o in entry_opts(e)]
+        # the options of one overview line, `-C <dir> run in <dir>; -h this
+        # help': those the dispatcher parses
+        parsed = {n for o in self.global_opts for n in o.names}
+        for ln in self.overview.split("\n"):
+            if not re.match(r"^\s+-\w", ln) or ";" not in ln:
+                continue
+            for item in ln.split(";"):
+                m = re.match(r"^\s*(%s)((?:\s+<[^>]+>)?)\s+(\S.*)$" % OPT, item)
+                if m and m.group(1) in parsed:
+                    out.append(Opt([m.group(1)], bool(m.group(2)), False, m.group(2).strip(), m.group(3).strip()))
         return out
 
     # options a command's help documents
