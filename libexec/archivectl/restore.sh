@@ -28,6 +28,7 @@ run() {
     [ -n "$name" ] || die "restore needs an archive name." $EXIT_INVALID_ARGS
     [ -z "$target" ] || [ -z "$mount" ] || die "--to and --mount exclude each other." $EXIT_INVALID_ARGS
     enter_repo SOURCE_DIR BORG_REPO
+    require_archive "$name"
     if [ -n "$mount" ]; then
         mount_archive "$name" "$mount" "${paths[@]}"
     else
@@ -46,7 +47,7 @@ extract_archive() {
     fi
     open_log
     mkdir -p "$target"
-    ( cd "$target" && borg extract "$BORG_REPO::$name" "$@" ) 2>&1 | tee -a "$LOG_FILE" >&2
+    ( cd "$target" && borg extract "$BORG_REPO::$name" "$@" ) >&2
     say "restored archive $name into $target"
 }
 
@@ -54,7 +55,6 @@ extract_archive() {
 mount_archive() {
     local name="$1" mount="$2"
     shift 2
-    require_known "$name" < <(archive_dates | cut -f1)
     if [ "$DRY_RUN" = true ]; then
         say "would mount archive $name at $mount"
         return 0

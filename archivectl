@@ -90,6 +90,11 @@ archive_dates() {
     borg list --format '{barchive}{TAB}{start:%Y-%m-%dT%H:%M:%S}{TAB}{id}{NL}' "$BORG_REPO"
 }
 
+# require_archive NAME...: die unless every NAME names an archive
+require_archive() {
+    require_known "$@" < <(archive_dates | cut -f1)
+}
+
 # with_sizes: every record "name<TAB>date<TAB>borg id" read on stdin, the
 # borg id replaced by the archive's original size in bytes
 with_sizes() {

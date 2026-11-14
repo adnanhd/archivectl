@@ -6,7 +6,7 @@ run() {
     read_ids
     [ ${#IDS[@]} -gt 0 ] || return 0
     enter_repo BORG_REPO
-    require_known "${IDS[@]}" < <(archive_dates | cut -f1)
+    require_archive "${IDS[@]}"
     if [ "$DRY_RUN" = true ]; then
         for id in "${IDS[@]}"; do
             say "would delete archive $id"
@@ -14,7 +14,7 @@ run() {
         return 0
     fi
     open_log
-    borg delete "$BORG_REPO" "${IDS[@]}" 2>&1 | tee -a "$LOG_FILE" >&2
+    borg delete "$BORG_REPO" "${IDS[@]}" >&2
     for id in "${IDS[@]}"; do
         say "deleted archive $id"
     done
