@@ -137,10 +137,17 @@ or
 in front, and
 .B create
 writes those names to the log, prints the record and ends with status 0.
+borg writes its output with
+.BR \-\-log\-json ,
+shown on standard error as text, so that these file names are never
+taken from its messages.
+The status is borg's own, not that of a command around it.
 On a borg error the archive is deleted only if this run's borg committed
 it, which the fingerprint it printed shows, and
 .B create
-ends with borg's status, after the parent below.
+ends with borg's status, after the parent below; a
+.B SOURCE_DIR
+that is no directory ends it with status 1, also after the parent.
 .B \-n
 runs
 .B borg create \-\-dry\-run \-\-list
@@ -268,7 +275,14 @@ is matched to its bytes in the listings of the two archives, which
 .B borg list
 writes with
 .B PYTHONIOENCODING=unicode_escape
-without loss, so that both comparisons print the same records.
+without loss: a path in the second archive only is added, one in the first
+only removed, and one in both whose type, link target or content
+.RB ( "borg list {sha256}" )
+differs is modified.
+When borg's records and the paths found that way are not as many, the
+comparison is refused with status 1; one with
+.B \-\-scratch
+still works.
 The live source is compared by extracting the archive into a directory
 made under the one
 .B \-\-scratch
@@ -310,7 +324,10 @@ error), no
 was found in the current directory or its parents, a name names no
 archive,
 .B create
-found an archive of its name,
+found an archive of its name or no
+.BR SOURCE_DIR ,
+.B diff
+of two archives could not tell paths borg shows alike apart,
 .B initialise
 found a repository under the old name, or another error.
 A failing
