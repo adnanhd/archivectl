@@ -1,35 +1,63 @@
 .\" Template for archivectl.1: scripts/gen-docs.py fills in the marked parts
 .\" from the dispatcher, libexec/archivectl/*.sh and lib/*.sh, reading them only.
-.TH ARCHIVECTL 1 2026-11-14 "archivectl" "User Commands"
+.TH ARCHIVECTL 1 2026-11-15 "archivectl" "User Commands"
 .SH NAME
 archivectl \- encrypted, compressed BorgBackup archives of a directory tree
 .SH SYNOPSIS
 .\" @generated synopsis
 .SH DESCRIPTION
 .B archivectl
-keeps one Borg repository per backed-up directory.
-.B initialise
+keeps one Borg repository per backed-up directory, on this host or on
+another one.
+.B init
 marks a directory as a backup source by writing a
 .I .borgbackup
 file into it, see
 .BR archivectl.borgbackup (5),
-and creates the repository under
+and initialises its repository, encrypted with
+.BR repokey ,
+under
 .BR $BORG_BACKUP_ROOT ,
-named after the directory's absolute path with every
-.B %
-written
-.BR %25 ,
-every
+named after the directory's path: the leading
 .B /
-.B %2F
-and every newline
+left out, every other
+.B /
+written
+.BR __ ,
+so that
+.I /home/adhd/test
+is kept in
+.IR home__adhd__test .
+So that no two directories share a name,
+.B %
+is written
+.BR %25 ,
+a newline
 .BR %0A ,
-so that no two directories share a name, and encrypted with
-.BR repokey .
+an underscore that begins or ends a part of the path or stands next to
+another one
+.BR %5F ,
+a
+.B !
+that begins the name
+.BR %21 ,
+and
+.B /
+itself is
+.BR %2F .
 A name longer than 199 bytes is cut to its first 135 bytes, followed by
 .B ~
 and the SHA\-256 of the path, 200 bytes in all, which no shorter name can
 equal; the log names below are made the same way.
+A repository that exists under that name is used again, and so is one
+under the name earlier versions gave, the whole path with
+.B %
+written
+.BR %25 ,
+.B /
+.B %2F
+and a newline
+.BR %0A .
 dedupctl named it with every
 .B /
 turned into
@@ -37,26 +65,49 @@ turned into
 and every
 .B !
 doubled, which two directories can share: when a repository under that
-name exists,
-.B initialise
+name exists and under neither other one,
+.B init
 refuses and says so.
-A repository that exists under the new name is used again.
 .PP
 Every other command looks for the nearest
 .I .borgbackup
-in the current directory or its parents, changes into that directory,
-and reads the file.
-An archive is named after the time it was started,
-.IR YYYY\-MM\-DD_HH:MM:SS ,
-and the name is its id.
+in the current directory, or the directory
+.B \-C
+names, or their parents, changes into that directory, and reads the
+file.
+An archive is named
+.IR <N>_<YYYY\-MM\-DD_HHMMSS> ,
+.I N
+being its number and the rest the time it was made.
+The number is the id every command prints and takes: 1 for the first
+archive, then one more for each, never given twice, also after a delete;
+.I $XDG_STATE_HOME/archivectl/<name>.sequence
+holds the last one given, since a repository on another host has no
+room for it.
+A command takes the full name too.
+Earlier versions named an archive
+.IR YYYY\-MM\-DD_HH:MM:SS ;
+such archives, and any other not named with a number, are listed with
+the numbers after the last one given, in time order, and the first
+.B create
+or
+.B delete
+renames each with
+.B borg rename
+to the name with its number and says so on standard error and in the
+log; with
+.B \-n
+they report the renames and do none.
 .PP
 Selecting and acting are separate commands:
 .B list
-prints records, one per line, its fields separated by tabs and the name
-first, and
+prints records, one per line, its fields separated by tabs and the
+number first, and
 .B delete
-acts on the records it reads from standard input.
+acts on the records it reads from standard input, or on the numbers it
+is given.
 Standard output carries records only: those of
+.BR status ,
 .B list
 and
 .BR diff ,
@@ -72,10 +123,10 @@ or
 Messages, progress, summaries and the output of
 .B borg
 go to standard error.
-A name given on the command line must name an archive, or the command
-ends with status 1 before it runs borg.
+An id given on the command line must name an archive, or the command
+ends with status 1 before it runs borg on it.
 Every command that writes,
-.BR initialise ,
+.BR init ,
 .BR create ,
 .B delete
 and
@@ -84,12 +135,101 @@ takes
 .BR \-n ,
 which reports on standard error what it would do and writes nothing.
 .PP
-Arguments are read only after the command; the dispatcher itself knows
-only
-.BR \-h " and " \-\-help .
+Before the command, the dispatcher takes
+.B \-C
+.I dir
+and
+.BR \-h ;
+every other option goes after the command.
+.B archivectl
+with no command prints the record of
+.B status
+and then the help, which fits one screen;
+.B archivectl
+.I command
+.B \-\-help
+prints the help of one command.
 Every command refuses an option it does not know with status 2 before it
-does anything, and every command takes
-.BR \-h " and " \-\-help .
+does anything.
+.SS "The passphrase"
+.B init
+reads the passphrase of a new repository once, from the terminal, or
+takes it from
+.BR BORG_PASSPHRASE ,
+keeps it in
+.BR pass (1)
+as
+.IR archivectl/<name> ,
+and writes
+.B BORG_PASSCOMMAND="pass show archivectl/<name>"
+into
+.IR .borgbackup ;
+every command exports it for its borg calls, so that gpg-agent answers
+and nothing is typed.
+Only with
+.B \-\-no\-pass
+or without
+.B pass
+installed does
+.B init
+leave it out; borg then asks for the passphrase itself.
+For a source initialised before this,
+.B init \-\-store\-passphrase
+reads the passphrase once, checks it with
+.BR "borg info" ,
+keeps it in pass and adds the
+.B BORG_PASSCOMMAND
+line to its
+.IR .borgbackup .
+.PP
+With neither
+.B BORG_PASSPHRASE
+nor
+.B BORG_PASSCOMMAND
+set and an encrypted repository, a command reads the passphrase once,
+from the terminal, and hands it to each of its borg calls in their
+environment only; it is never written anywhere or logged.
+Without a terminal on standard error it ends with status 1 instead of
+asking.
+.SS "Remote repositories"
+.B init \-\-repo
+.I url
+uses the repository at
+.I url
+as given: an
+.B ssh://user@host[:port]/path
+URL, an scp-style
+.BR user@host:path ,
+or a local path, as for BorgBase:
+.PP
+.RS
+.EX
+archivectl init \-\-repo ssh://xxxx@xxxx.repo.borgbase.com/./repo
+.EE
+.RE
+.PP
+Without
+.BR \-\-repo ,
+a
+.B BORG_BACKUP_ROOT
+that is such a URL means
+.I <root>/<name>
+on that host.
+For a repository on another host borg itself answers whether it exists,
+with
+.BR "borg info" ;
+.B init
+initialises it with
+.B borg init \-\-make\-parent\-dirs
+or uses the one that is there.
+borg reaches the host with ssh, or the command
+.B BORG_RSH
+names, from the environment or
+.IR .borgbackup ,
+for instance
+.BR "BORG_RSH='ssh \-i ~/.ssh/borgbase_ed25519'" ;
+.B archivectl
+asks for nothing beyond what borg and ssh ask.
 .SH OPTIONS
 .\" @generated options
 .SH COMMANDS
@@ -104,7 +244,13 @@ leaving out the
 .B EXCLUDES
 of
 .IR .borgbackup .
-An archive of the same name is refused before borg runs.
+The create takes the next number and keeps it in the sequence file,
+holding a lock on it meanwhile, so that two creates never share a
+number; a number whose archive failed is not given again either.
+Of borg's output, standard error gets what borg warns about, and
+.B \-\-stats
+adds borg's statistics; otherwise one line says the archive was
+created.
 borg runs with
 .BR BORG_EXIT_CODES=modern ,
 and its warnings, status 1 or 100 to 127, alone or together, keep the
@@ -148,10 +294,17 @@ holds the record of this repository's archive only.
 The parent's archive is created whatever became of this one; the status
 is this archive's, or the parent's when this one was made.
 .\" @end
+.\" @prose status
+.PP
+The number and the date of the newest are empty when there is no
+archive; the size is the repository's deduplicated, compressed size, as
+.B borg info
+gives it.
+.\" @end
 .\" @prose list
 .PP
 The date is the archive's start time as borg records it,
-.IR YYYY\-MM\-DDTHH:MM:SS ,
+.IR "YYYY\-MM\-DD HH:MM:SS" ,
 and the size its original size from
 .BR "borg info" .
 The options combine: the age options select first, then
@@ -162,14 +315,25 @@ take from what is left, in that order.
 .\" @end
 .\" @prose delete
 .PP
-The first field of each line read is the name; the rest of the line is
-ignored, and blank lines are skipped.
-Every name must name an archive, or nothing is deleted and the status
-is 1.
+Ids given as arguments are deleted; without them,
+.B delete
+reads standard input, where the first field of each line is the id, the
+rest of the line ignored and blank lines skipped.
+Ids as arguments while standard input is a pipe or a file are refused
+with status 2, so that no input is half ignored; with neither, a
+terminal on standard input,
+.B delete
+waits for no typed ids: it says how it is used, as in
+.BR "archivectl list \-\-older 30 | archivectl delete \-n" ,
+and ends with status 2.
+.PP
+Every id, a number or a full name, must name an archive, or nothing is
+deleted and the status is 1.
 The archives are removed with one
 .BR "borg delete" ;
 the space they held is freed by
 .BR "borg compact" .
+Their numbers are not given again.
 .\" @end
 .\" @prose restore
 .PP
@@ -178,7 +342,7 @@ The archive is extracted with
 into
 .BR SOURCE_DIR ,
 the repository root with the configuration
-.B initialise
+.B init
 writes, or into the directory of
 .BR \-\-to ,
 created when missing.
@@ -253,7 +417,7 @@ inside the source, whose extraction would count as added.
 Success, also
 .BR \-h " / " \-\-help
 after any command or none,
-.B initialise
+.B init
 on a directory that has a
 .I .borgbackup
 already, and
@@ -261,17 +425,21 @@ already, and
 with no input.
 .TP
 .B 1
-No command or an unknown command (the usage text goes to standard
-error), no
+An unknown command (the help goes to standard error), no
 .I .borgbackup
-was found in the current directory or its parents, a name names no
-archive,
+was found in the current directory or its parents, also for
+.B archivectl
+with no command, an id names no archive, the repository needs a
+passphrase and there is no terminal to ask on,
+.B init
+was given a wrong passphrase for a repository there already, or pass
+holds the entry it would write,
 .B create
-found an archive of its name or no
+found no
 .BR SOURCE_DIR ,
 .B diff
 of two archives could not tell paths borg shows alike apart,
-.B initialise
+.B init
 found a repository under the old name, or another error.
 A failing
 .B borg
@@ -282,17 +450,21 @@ that checks a name among them, ends the run with its own status; in
 a warning does not.
 .TP
 .B 2
-An option the command does not know or without its value,
-.B initialise
+An option the command does not know or without its value, a
+.B \-C
+directory that cannot be entered,
+.B delete
+given ids and piped input both, or neither,
+.B init
 given more than one path or a path that is not a directory,
 .B restore
-given no name or both
+given no id or both
 .B \-\-to
 and
 .BR \-\-mount ,
 or
 .B diff
-given no name, more than two, or one without
+given no id, more than two, or one without
 .B \-\-scratch
 or with one inside the source.
 .TP
@@ -303,15 +475,29 @@ does not set a variable the command needs.
 .TP
 .B BORG_BACKUP_ROOT
 Where
-.B initialise
-creates repositories; default
+.B init
+creates repositories, a local directory or an
+.B ssh://
+or scp-style URL; default
+.I /data/backup/borg
+when
+.I /data
+is a mount point, else
 .IR ~/.borg_backups .
 .TP
-.BR BORG_PASSPHRASE ", " BORG_PASSCOMMAND ", ..."
-Read by
-.B borg
-itself, which every command runs; see
-.BR borg (1).
+.BR BORG_PASSPHRASE ", " BORG_PASSCOMMAND
+The passphrase, or the command that prints it, for borg; see
+.B The passphrase
+above.
+.TP
+.B BORG_RSH
+The command borg reaches another host with, instead of ssh.
+.TP
+.B PASSWORD_STORE_DIR
+Where
+.B pass
+keeps its entries; default
+.IR ~/.password\-store .
 .TP
 .B XDG_STATE_HOME
 Where the logs are kept; default
@@ -324,8 +510,13 @@ The backup source's configuration, in the directory it backs up; see
 .TP
 .I $BORG_BACKUP_ROOT/<name>/
 The repository
-.B initialise
+.B init
 creates.
+.TP
+.I $XDG_STATE_HOME/archivectl/<repository>.sequence
+The last number given to an archive of a repository,
+.I <repository>
+being its location turned into a file name as for the repository.
 .TP
 .I $XDG_STATE_HOME/archivectl/<name>.log
 The log of a repository,
@@ -340,12 +531,32 @@ Logs of earlier versions, one per archive in
 .IR $BORG_REPO/logs/ ,
 are left as they are.
 .SH EXAMPLES
-Delete the archives older than 30 days, after looking at what goes:
+Back up the current directory, and see what is there:
+.PP
+.RS
+.EX
+archivectl init && archivectl create
+archivectl status
+.EE
+.RE
+.PP
+Back up to BorgBase with its own key:
+.PP
+.RS
+.EX
+export BORG_RSH='ssh \-i ~/.ssh/borgbase_ed25519'
+archivectl init \-\-repo ssh://xxxx@xxxx.repo.borgbase.com/./repo
+.EE
+.RE
+.PP
+Delete the archives older than 30 days, after looking at what goes, and
+then archive 4:
 .PP
 .RS
 .EX
 archivectl list \-\-older 30 | archivectl delete \-n
 archivectl list \-\-older 30 | archivectl delete
+archivectl delete 4
 .EE
 .RE
 .PP
@@ -359,4 +570,5 @@ archivectl restore \-\-to /tmp/old "$(archivectl list \-\-last 1 | cut \-f1)" no
 .SH SEE ALSO
 .BR archivectl.borgbackup (5),
 .BR borg (1),
+.BR pass (1),
 .BR snapshotctl (1)

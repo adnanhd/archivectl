@@ -1,12 +1,12 @@
 .\" Written by hand from lib/common.sh (require_config, build_exclude_params)
 .\" and libexec/archivectl/*.sh; keep it in step with them.
-.TH ARCHIVECTL.BORGBACKUP 5 2026-11-14 "archivectl" "File Formats"
+.TH ARCHIVECTL.BORGBACKUP 5 2026-11-15 "archivectl" "File Formats"
 .SH NAME
 archivectl.borgbackup, .borgbackup \- backup source configuration for archivectl
 .SH SYNOPSIS
 .I <directory>/.borgbackup
 .SH DESCRIPTION
-.B archivectl initialise
+.B archivectl init
 writes
 .I .borgbackup
 into the directory it is to back up.
@@ -21,11 +21,28 @@ set any variable.
 These variables are read:
 .TP
 .B BORG_REPO
-The Borg repository.
+The Borg repository, a local path or an
+.B ssh://
+or scp-style URL.
 Required by every command but
-.BR initialise ,
+.BR init ,
 which sets it to
-.IR $BORG_BACKUP_ROOT/<name> .
+.I $BORG_BACKUP_ROOT/<name>
+or the location
+.B \-\-repo
+gives.
+.TP
+.B BORG_PASSCOMMAND
+The command that prints the passphrase,
+.B pass show archivectl/<name>
+as
+.B init
+writes it when it keeps the passphrase in
+.BR pass (1);
+every command exports it for its borg calls.
+.TP
+.B BORG_RSH
+The command borg reaches another host with, exported for borg when set.
 .TP
 .B SOURCE_DIR
 What
@@ -36,7 +53,7 @@ compares and
 .B restore
 extracts into, relative to the directory of the file.
 Required by those three;
-.B initialise
+.B init
 sets it to
 .BR ./ .
 .TP
@@ -63,7 +80,7 @@ and
 When no directory at or above the current one holds the file, the
 command ends with status 1; a file that leaves a required variable empty
 ends it with status 3.
-.B initialise
+.B init
 writes every value quoted for the shell
 .RB ( "printf %q" ),
 so that a
@@ -74,9 +91,11 @@ earlier versions, with the values in double quotes, are read as they are.
 .EX
 # Backup repository configuration for /home/user/papers
 SOURCE_DIR=./
-BORG_REPO=/home/user/.borg_backups/%2Fhome%2Fuser%2Fpapers
+BORG_REPO=/data/backup/borg/home__user__papers
+BORG_PASSCOMMAND=pass\e show\e \e'archivectl/home__user__papers\e'
 EXCLUDES=(".cache" "node_modules" "*.log")
 .EE
 .SH SEE ALSO
 .BR archivectl (1),
-.BR borg (1)
+.BR borg (1),
+.BR pass (1)
