@@ -60,13 +60,21 @@ When it is not set the patterns are
 and
 .BR __pycache__ .
 .PP
-A file that is missing, or that leaves a required variable empty, ends
-the command with status 3.
+When no directory at or above the current one holds the file, the
+command ends with status 1; a file that leaves a required variable empty
+ends it with status 3.
+.B initialise
+writes every value quoted for the shell
+.RB ( "printf %q" ),
+so that a
+.BR $ ,
+a backquote or a space in a path stays part of it; files written by
+earlier versions, with the values in double quotes, are read as they are.
 .SH EXAMPLES
 .EX
-# Borg backup configuration for /home/user/papers
-SOURCE_DIR="./"
-BORG_REPO="/home/user/.borg_backups/!home!user!papers"
+# Backup repository configuration for /home/user/papers
+SOURCE_DIR=./
+BORG_REPO=/home/user/.borg_backups/%2Fhome%2Fuser%2Fpapers
 EXCLUDES=(".cache" "node_modules" "*.log")
 .EE
 .SH SEE ALSO

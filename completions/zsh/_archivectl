@@ -10,8 +10,9 @@ _archivectl() {
     'list:Print one record per archive, oldest first: name, date, original size in bytes.'
     'delete:Delete the archives whose names begin the lines read on standard input.'
     'restore:Extract archive <name>, or only the given paths in it, into the source directory.'
-    'diff:Print one record per path whose content differs from archive <name> to <name2>.'
+    'diff:Print one record per path whose content or type differs from archive <name> to <name2>.'
     'check:Check the integrity of the repository with borg check.'
+    'init:Same as `archivectl initialise'\''; see initialise.'
   )
   _arguments -C \
     '(-h --help)'{-h,--help}'[Show this help message and exit.]' \
@@ -47,9 +48,14 @@ _archivectl() {
             '(-h --help)'{-h,--help}'[Show this help message and exit.]' \
             '*: :_files' ;;
         (diff) _arguments \
+            '--scratch[Extract archive <name> under <dir> to compare it with the live source; that comparison needs it.]:<dir>:' \
             '(-h --help)'{-h,--help}'[Show this help message and exit.]' \
             '*: :_files' ;;
         (check) _arguments \
+            '(-h --help)'{-h,--help}'[Show this help message and exit.]' \
+            '*: :_files' ;;
+        (init) _arguments \
+            '(-n --dry-run)'{-n,--dry-run}'[]' \
             '(-h --help)'{-h,--help}'[Show this help message and exit.]' \
             '*: :_files' ;;
         (*) _files ;;

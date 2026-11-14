@@ -20,13 +20,27 @@ file into it, see
 and creates the repository under
 .BR $BORG_BACKUP_ROOT ,
 named after the directory's absolute path with every
+.B %
+written
+.BR %25 ,
+every
+.B /
+.B %2F
+and every newline
+.BR %0A ,
+so that no two directories share a name, and encrypted with
+.BR repokey .
+dedupctl named it with every
 .B /
 turned into
 .B !
-(and every
+and every
 .B !
-doubled), encrypted with
-.BR repokey .
+doubled, which two directories can share: when a repository under that
+name exists,
+.B initialise
+refuses and says so.
+A repository that exists under the new name is used again.
 .PP
 Every other command looks for the nearest
 .I .borgbackup
@@ -50,9 +64,16 @@ and the record of the archive
 .B create
 made.
 An empty answer prints nothing.
+In a path of a record, a backslash, tab or newline is written
+.BR \e\e ,
+.B \et
+or
+.BR \en .
 Messages, progress, summaries and the output of
 .B borg
 go to standard error.
+A name given on the command line must name an archive, or the command
+ends with status 1 before it runs borg.
 Every command that writes,
 .BR initialise ,
 .BR create ,
@@ -99,6 +120,17 @@ leaving out the
 .B EXCLUDES
 of
 .IR .borgbackup .
+borg runs with
+.BR BORG_EXIT_CODES=modern :
+status 0, or a warning that only files changed or vanished while they
+were read (100, 103 and 107), makes a complete archive, whose record is
+printed.
+On any other status, 105 for a file borg could not read among them, the
+archive is deleted again if borg committed it, and
+.B create
+ends with that status, after the parent below.
+A borg older than 1.4 gives status 1 for every warning, which counts as
+incomplete.
 .B \-n
 runs
 .B borg create \-\-dry\-run \-\-list
@@ -112,6 +144,8 @@ a
 stays a dry run in the parent.
 The parent's record goes to standard error, so that standard output
 holds the record of this repository's archive only.
+The parent's archive is created whatever became of this one; the status
+is this archive's, or the parent's when this one was made.
 .SS "list"
 .TP
 \fBarchivectl list\fR [\fB\-\-older\fR N] [\fB\-\-newer\fR N] [\fB\-\-first\fR N] [\fB\-\-last\fR N]
@@ -198,30 +232,43 @@ with its list on standard error, and with
 only checks that the archive exists.
 .SS "diff"
 .TP
-\fBarchivectl diff\fR <name> [<name2>]
+\fBarchivectl diff\fR [\fB\-\-scratch\fR <dir>] <name> [<name2>]
 .PP
-Print one record per path whose content differs from archive <name> to <name2>. Without <name2> the live source is compared: path, then added, removed or modified.
+Print one record per path whose content or type differs from archive <name> to <name2>. Without <name2> the live source is compared: path, then added, removed or modified. Options:
+.TP
+\fB\-\-scratch\fR <dir>
+Extract archive <name> under <dir> to compare it with the live source; that comparison needs it.
 .PP
+.B added
+is a path only the second holds,
+.B removed
+a path only the first holds, and
+.B modified
+a path whose content or type differs, also one that is a file in one
+and a directory or a link in the other.
 Two archives are compared with
-.BR "borg diff \-\-content\-only" .
-The live source is compared by extracting the archive into a temporary
-directory under
-.BR $TMPDIR ,
-removed afterwards, and comparing the trees by content with
+.BR "borg diff \-\-json\-lines" ,
+which compares the chunks borg stored and reads no file data; changes of
+times, owners and permissions alone are left out.
+The live source is compared by extracting the archive into a directory
+made under the one
+.B \-\-scratch
+names, which needs room for the whole archive and is removed afterwards,
+and comparing the trees by content with
 .B rsync \-\-dry\-run \-\-checksum \-\-delete
 leaving out the
-.BR EXCLUDES :
-.B added
-is a path only the live source holds,
-.B removed
-a path only the archive holds, and
-.B modified
-a path whose content or type differs.
+.BR EXCLUDES .
+Without
+.BR \-\-scratch ,
+that comparison is refused with status 2.
 .SS "check"
 .TP
 \fBarchivectl check\fR
 .PP
 Check the integrity of the repository with borg check.
+.SS "init"
+.PP
+Same as \(oqarchivectl initialise\(cq; see initialise.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -239,10 +286,15 @@ with no input.
 No command or an unknown command (the usage text goes to standard
 error), no
 .I .borgbackup
-was found, a name names no archive, or another error.
+was found in the current directory or its parents, a name names no
+archive,
+.B initialise
+found a repository under the old name, or another error.
 A failing
 .B borg
-command ends the run with its own status.
+command ends the run with its own status, in
+.B create
+one that is not 0, 100, 103 or 107.
 .TP
 .B 2
 An option the command does not know or without its value,
@@ -255,11 +307,12 @@ and
 .BR \-\-mount ,
 or
 .B diff
-given no name or more than two.
+given no name, more than two, or one without
+.BR \-\-scratch .
 .TP
 .B 3
 .I .borgbackup
-is missing or does not set a variable the command needs.
+does not set a variable the command needs.
 .SH ENVIRONMENT
 .TP
 .B BORG_BACKUP_ROOT
@@ -277,11 +330,6 @@ itself, which every command runs; see
 .B XDG_STATE_HOME
 Where the logs are kept; default
 .IR ~/.local/state .
-.TP
-.B TMPDIR
-Where
-.B diff
-extracts an archive to compare it with the live source.
 .SH FILES
 .TP
 .I .borgbackup
@@ -298,9 +346,9 @@ The log of a repository,
 .I <name>
 being its root's path turned into a file name as for the repository.
 Every command that writes appends a line with the time per thing it
-did, and the output of the
-.B borg
-commands it ran.
+did.
+The output of borg stays out of it, since borg can show the passphrase
+there, and the log and its directory are readable by the user only.
 A dry run writes no log.
 Logs of earlier versions, one per archive in
 .IR $BORG_REPO/logs/ ,

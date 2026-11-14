@@ -11,7 +11,7 @@ Encrypted, compressed, deduplicated archives of a directory tree with [BorgBacku
 | `list [--older N] [--newer N] [--first N] [--last N]` | Print one record per archive, oldest first: `name<TAB>date<TAB>size`. |
 | `delete [-n]` | Delete the archives whose names begin the lines on standard input. |
 | `restore [-n] [--to <dir> \| --mount <dir>] <name> [<path>...]` | Extract an archive, or paths in it, into the source or `<dir>`, or mount it. |
-| `diff <name> [<name2>]` | Print one record per changed path, `path<TAB>added\|removed\|modified`, from `<name>` to `<name2>` or to the live source. |
+| `diff [--scratch <dir>] <name> [<name2>]` | Print one record per changed path, `path<TAB>added\|removed\|modified`, from `<name>` to `<name2>`, or to the live source after extracting `<name>` under `<dir>`. |
 | `check` | Check the repository with `borg check`. |
 
 Selecting and acting are separate: `list` prints records, `delete` reads them.
@@ -23,6 +23,8 @@ archivectl restore --to /tmp/old "$(archivectl list --last 1 | cut -f1)" notes.t
 ```
 
 Standard output carries records only, one per line, tab-separated, name first; messages, summaries and borg's own output go to standard error, and an empty answer prints nothing. Every command that writes takes `-n`, which reports what it would do and writes nothing. A write's log goes to `${XDG_STATE_HOME:-~/.local/state}/archivectl/<repository>.log`. `delete` does not run `borg compact`, which frees the space.
+
+A path in a record writes a backslash, tab or newline as `\\`, `\t` or `\n`.
 
 `man archivectl` documents every command and option, and `man 5 archivectl.borgbackup` the configuration file.
 
@@ -46,6 +48,8 @@ cd archivectl
 make install                  # PREFIX=~/.local by default
 make PREFIX=/usr DESTDIR=pkg install
 make uninstall
+make list-old                 # the files the old dedupctl install left, one per line
+make uninstall-old            # remove them
 ```
 
 | Component | Installed to |
@@ -55,7 +59,7 @@ make uninstall
 | completions | `PREFIX/share/bash-completion/completions/`, `PREFIX/share/fish/vendor_completions.d/`, `PREFIX/share/zsh/site-functions/` |
 | manual pages | `PREFIX/share/man/man1/`, `PREFIX/share/man/man5/` |
 
-The script finds its modules in the source tree (`libexec/archivectl/`, `lib/`) or under `PREFIX/lib/archivectl/`. `lib/` is the submodule [backuplib](https://github.com/adnanhd/backuplib). `diff` against the live source also needs rsync.
+`make install` writes `LIBDIR` into the installed script, so `BINDIR` and `LIBDIR` can be set apart; a copy that `make install` did not write finds its modules in the source tree (`libexec/archivectl/`, `lib/`) or under `PREFIX/lib/archivectl/`. `lib/` is the submodule [backuplib](https://github.com/adnanhd/backuplib). `diff` against the live source also needs rsync.
 
 The section-1 page and the three completions are generated from the source by `scripts/gen-docs.py`, which reads the dispatcher, `libexec/` and `lib/` and never runs the tool; rerun it after changing a command or an option. The prose of the page is in `man/archivectl.1.in`; the section-5 page is written by hand.
 
@@ -69,4 +73,4 @@ runs the pytest and Hypothesis suite in `tests/` against borg: every run gets a 
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License.

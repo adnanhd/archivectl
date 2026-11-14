@@ -77,9 +77,11 @@ Commands:
         --to <dir>      : Extract into <dir> instead.
         --mount <dir>   : Mount the archive at <dir> instead.
 
-  diff <name> [<name2>]
-      Print one record per path whose content differs from archive <name> to <name2>.
+  diff [--scratch <dir>] <name> [<name2>]
+      Print one record per path whose content or type differs from archive <name> to <name2>.
       Without <name2> the live source is compared: path, then added, removed or modified.
+      Options:
+        --scratch <dir> : Extract archive <name> under <dir> to compare it with the live source; that comparison needs it.
 
   check
       Check the integrity of the repository with borg check.

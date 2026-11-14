@@ -9,7 +9,7 @@ _archivectl() {
         [[ ${COMP_WORDS[i]} != -* ]] && { cmd=${COMP_WORDS[i]}; break; }
     done
     if [[ -z $cmd ]]; then
-        COMPREPLY=($(compgen -W "initialise create list delete restore diff check -h --help" -- "$cur"))
+        COMPREPLY=($(compgen -W "initialise create list delete restore diff check init -h --help" -- "$cur"))
         return
     fi
     case $cmd in
@@ -18,8 +18,9 @@ _archivectl() {
         list) COMPREPLY=($(compgen -W "--older --newer --first --last -h --help -h --help" -- "$cur")) ;;
         delete) COMPREPLY=($(compgen -W "-n --dry-run -h --help -h --help" -- "$cur")) ;;
         restore) COMPREPLY=($(compgen -W "-n --dry-run --to --mount -h --help -h --help" -- "$cur")) ;;
-        diff) COMPREPLY=($(compgen -W "-h --help -h --help" -- "$cur")) ;;
+        diff) COMPREPLY=($(compgen -W "--scratch -h --help -h --help" -- "$cur")) ;;
         check) COMPREPLY=($(compgen -W "-h --help -h --help" -- "$cur")) ;;
+        init) COMPREPLY=($(compgen -W "-n --dry-run -h --help -h --help" -- "$cur")) ;;
     esac
 }
 
