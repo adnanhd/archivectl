@@ -7,36 +7,71 @@ run() {
     name=$(date '+%Y-%m-%d_%H:%M:%S')
     require_free_name "$name"
     build_exclude_params borg
-    if [ "$DRY_RUN" = true ]; then
+    if [ ! -d "$SOURCE_DIR" ]; then
+        say "there is no directory $SOURCE_DIR in $REPO_ROOT to archive"
+        status=1
+    elif [ "$DRY_RUN" = true ]; then
         say "would create archive $name of $REPO_ROOT"
-        ( cd "$SOURCE_DIR" && borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . ) >&2 ||
-            status=$?
+        ( cd "$SOURCE_DIR" || exit 2
+          exec borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . ) >&2 || status=$?
+        ! is_warning "$status" || status=0
     else
-        open_log
-        BORG_OUTPUT=$(umask 077 && mktemp)
-        trap 'rm -f "$BORG_OUTPUT"' EXIT
-        # --list --filter=CE names each file that changed while borg read it
-        # (C) or that it could not read (E); the archive keeps the rest.
-        ( cd "$SOURCE_DIR" && BORG_EXIT_CODES=modern borg create --stats --list --filter=CE \
-            --compression lz4 "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . ) 2>&1 |
-            tee "$BORG_OUTPUT" >&2 || status=$?
-    fi
-    # Status 1 and 100 to 127 are borg's warnings: the archive is committed.
-    if [ "$status" -eq 1 ] || { [ "$status" -ge 100 ] && [ "$status" -le 127 ]; }; then
-        [ "$DRY_RUN" = true ] || log_skipped_files "$name" "$status"
-        status=0
-    fi
-    if [ "$status" -eq 0 ] && [ "$DRY_RUN" = false ]; then
-        say "created archive $name of $REPO_ROOT"
-        archive_dates | NAME="$name" awk -F '\t' '$1 == ENVIRON["NAME"]' | with_sizes
-    elif [ "$status" -ne 0 ]; then
-        say "archive $name of $REPO_ROOT failed (borg status $status)"
-        [ "$DRY_RUN" = true ] || drop_archive "$name"
+        archive_source "$name"
     fi
     create_in_parent "$@" || parent=$?
     [ "$status" -eq 0 ] || return "$status"
     return "$parent"
 }
+
+# is_warning STATUS: whether STATUS is one of borg's warnings, 1 or 100 to 127
+is_warning() {
+    [ "$1" -eq 1 ] || { [ "$1" -ge 100 ] && [ "$1" -le 127 ]; }
+}
+
+# archive_source NAME: run borg create for archive NAME and set status; on
+# a warning the archive is kept, on an error dropped if this run made it
+archive_source() {
+    open_log
+    BORG_OUTPUT=$(mktemp "${LOG_FILE%.log}.borg.XXXXXX")
+    trap 'rm -f "$BORG_OUTPUT"' EXIT
+    # status is borg's own, PIPESTATUS[0]; --log-json keeps the file status
+    # lines (C: changed while read, E: not read) apart from borg's messages,
+    # and the reader shows them as text
+    if ( cd "$SOURCE_DIR" || exit 2
+         BORG_EXIT_CODES=modern exec borg create --log-json --stats --list --filter=CE --compression lz4 \
+             "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$1" . ) 2>&1 |
+        tee "$BORG_OUTPUT" | LC_ALL=C awk "$AWK_JSON$AWK_BORG_LOG" >&2; then
+        status=0
+    else
+        status=${PIPESTATUS[0]}
+    fi
+    if is_warning "$status"; then
+        log_skipped_files "$1" "$status"
+        status=0
+    fi
+    if [ "$status" -eq 0 ]; then
+        say "created archive $1 of $REPO_ROOT"
+        archive_dates | NAME="$1" awk -F '\t' '$1 == ENVIRON["NAME"]' | with_sizes
+    else
+        say "archive $1 of $REPO_ROOT failed (borg status $status)"
+        drop_archive "$1"
+    fi
+}
+
+# An awk program, run with LC_ALL=C, that shows borg's --log-json output as
+# text: each message, and each file status as "C path" or "E path"
+AWK_BORG_LOG='
+/^\{"type": "(log_message|file_status)"/ {
+    if (match($0, /"message": "([^"\\]|\\.)*"/)) print unjson(substr($0, RSTART + 12, RLENGTH - 13))
+    else if (match($0, /"path": "([^"\\]|\\.)*"/)) {
+        path = substr($0, RSTART + 9, RLENGTH - 10)
+        match($0, /"status": "."/)
+        print substr($0, RSTART + 11, 1) " " unjson(path)
+    }
+    fflush()
+    next
+}
+{ print; fflush() }'
 
 # require_free_name NAME: die when the repository holds an archive NAME
 require_free_name() {
@@ -47,23 +82,28 @@ require_free_name() {
     fi
 }
 
-# log_skipped_files NAME STATUS: log the files borg named with C or E
+# log_skipped_files NAME STATUS: log each file borg's file status lines name
 log_skipped_files() {
-    local line
+    local status path
     say "archive $1 of $REPO_ROOT lacks or holds changed files borg named above (borg status $2)"
-    while IFS= read -r line; do
-        case "$line" in
-            "C "*) say "${line#C } changed while borg read it" ;;
-            "E "*) say "${line#E } could not be read" ;;
+    while IFS=$'\t' read -r status path; do
+        case "$status" in
+            C) say "$path changed while borg read it" ;;
+            E) say "$path could not be read" ;;
         esac
-    done <"$BORG_OUTPUT"
+    done < <(LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON"'
+        /^\{"type": "file_status"/ && match($0, /"path": "([^"\\]|\\.)*"/) {
+            path = substr($0, RSTART + 9, RLENGTH - 10)
+            match($0, /"status": "."/)
+            print substr($0, RSTART + 11, 1) "\t" esc(unjson(path))
+        }' "$BORG_OUTPUT")
 }
 
 # drop_archive NAME: delete archive NAME if this run's borg committed it, as
 # the fingerprint borg printed shows; an archive made by another run stays
 drop_archive() {
     local fingerprint known
-    fingerprint=$(sed -n 's/^Archive fingerprint: \([0-9a-f]*\)$/\1/p' "$BORG_OUTPUT")
+    fingerprint=$(grep -ao 'Archive fingerprint: [0-9a-f]\{64\}' "$BORG_OUTPUT" | cut -d' ' -f3 || true)
     [ -n "$fingerprint" ] || return 0
     known=$(archive_dates)
     if LC_ALL=C grep -aqxF -e "$1"$'\t'"$fingerprint" <<<"$(cut -f1,3 <<<"$known")"; then
