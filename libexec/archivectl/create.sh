@@ -7,14 +7,17 @@ run() {
     name=$(date '+%Y-%m-%d_%H:%M:%S')
     require_free_name "$name"
     build_exclude_params borg
-    if [ ! -d "$SOURCE_DIR" ]; then
-        say "there is no directory $SOURCE_DIR in $REPO_ROOT to archive"
+    # borg runs in SOURCE_DIR, entered here, so that a failure to enter it
+    # is not taken for one of borg's
+    if [ ! -d "$SOURCE_DIR" ] || [ ! -r "$SOURCE_DIR" ] || ! cd -- "$SOURCE_DIR" 2>/dev/null; then
+        [ "$DRY_RUN" = true ] || open_log
+        say "$REPO_ROOT has no directory $SOURCE_DIR it can read, so no archive is made"
         status=1
     elif [ "$DRY_RUN" = true ]; then
         say "would create archive $name of $REPO_ROOT"
-        ( cd "$SOURCE_DIR" || exit 2
-          exec borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . ) >&2 || status=$?
+        borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . >&2 || status=$?
         ! is_warning "$status" || status=0
+        cd -- "$REPO_ROOT"
     else
         archive_source "$name"
     fi
@@ -37,14 +40,14 @@ archive_source() {
     # status is borg's own, PIPESTATUS[0]; --log-json keeps the file status
     # lines (C: changed while read, E: not read) apart from borg's messages,
     # and the reader shows them as text
-    if ( cd "$SOURCE_DIR" || exit 2
-         BORG_EXIT_CODES=modern exec borg create --log-json --stats --list --filter=CE --compression lz4 \
-             "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$1" . ) 2>&1 |
+    if BORG_EXIT_CODES=modern borg create --log-json --stats --list --filter=CE --compression lz4 \
+            "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$1" . 2>&1 |
         tee "$BORG_OUTPUT" | LC_ALL=C awk "$AWK_JSON$AWK_BORG_LOG" >&2; then
         status=0
     else
         status=${PIPESTATUS[0]}
     fi
+    cd -- "$REPO_ROOT"
     if is_warning "$status"; then
         log_skipped_files "$1" "$status"
         status=0
@@ -91,13 +94,31 @@ log_skipped_files() {
             C) say "$path changed while borg read it" ;;
             E) say "$path could not be read" ;;
         esac
-    done < <(LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON"'
-        /^\{"type": "file_status"/ && match($0, /"path": "([^"\\]|\\.)*"/) {
-            path = substr($0, RSTART + 9, RLENGTH - 10)
-            match($0, /"status": "."/)
-            print substr($0, RSTART + 11, 1) "\t" esc(unjson(path))
-        }' "$BORG_OUTPUT")
+    done < <(LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON$AWK_SKIPPED_FILES" "$BORG_OUTPUT")
 }
+
+# An awk program, run with LC_ALL=C, that prints "C<TAB>path" or "E<TAB>path"
+# for each file status line of borg's --log-json output. borg writes a byte
+# of the path that is not UTF-8 as ? there, but keeps it in the warning just
+# before, "<path>: <reason>", from which the path is taken when it shows so.
+AWK_SKIPPED_FILES='
+function raw_of(path, message,    i) {
+    for (i = 1; i < length(message); i++)
+        if (substr(message, i, 2) == ": " && shown(substr(message, 1, i - 1)) == path) return substr(message, 1, i - 1)
+    return path
+}
+/^\{"type": "log_message"/ && /"levelname": "WARNING"/ && match($0, /"message": "([^"\\]|\\.)*"/) {
+    warning = unjson(substr($0, RSTART + 12, RLENGTH - 13))
+    next
+}
+/^\{"type": "file_status"/ && match($0, /"path": "([^"\\]|\\.)*"/) {
+    path = unjson(substr($0, RSTART + 9, RLENGTH - 10))
+    match($0, /"status": "."/)
+    status = substr($0, RSTART + 11, 1)
+    if (index(path, "?") && warning != "") path = raw_of(path, warning)
+    print status "\t" esc(path)
+    warning = ""
+}'
 
 # drop_archive NAME: delete archive NAME if this run's borg committed it, as
 # the fingerprint borg printed shows; an archive made by another run stays
