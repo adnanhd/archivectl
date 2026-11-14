@@ -20,7 +20,7 @@ run() {
         say "$REPO_ROOT holds a $CONFIG already."
         return 0
     fi
-    repo="$BORG_BACKUP_ROOT/$(safe_name "$REPO_ROOT")"
+    repo=$(storage_for "$BORG_BACKUP_ROOT" "$REPO_ROOT")
     if [ "$DRY_RUN" = true ]; then
         say "would write $REPO_ROOT/$CONFIG and initialise the Borg repository $repo"
         return 0
@@ -29,13 +29,10 @@ run() {
     if [ -e "$repo/config" ]; then
         say "using the existing Borg repository $repo"
     else
+        # borg's own output stays out of the log: it can show the passphrase
         mkdir -p "$repo"
-        borg init --encryption=repokey "$repo" 2>&1 | tee -a "$LOG_FILE" >&2
+        borg init --encryption=repokey "$repo" >&2
     fi
-    cat >"$REPO_ROOT/$CONFIG" <<EOF
-# Borg backup configuration for ${REPO_ROOT}
-SOURCE_DIR="./"
-BORG_REPO="${repo}"
-EOF
+    write_config "$REPO_ROOT/$CONFIG" SOURCE_DIR=./ BORG_REPO="$repo"
     say "initialised $REPO_ROOT, Borg repository $repo"
 }
