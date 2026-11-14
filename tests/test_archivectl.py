@@ -408,11 +408,19 @@ def test_completions_know_the_init_alias() -> None:
 
 
 def test_both_diffs_give_the_bytes_of_a_name_that_is_not_utf8(sandbox: Sandbox) -> None:
+    def name(raw: bytes) -> Path:
+        return sandbox.source / os.fsdecode(raw)
+    for raw in (b"a\xfe", b"a\xff", b"b?", b"b\xff", b"gone\xff", b"c?"):
+        name(raw).write_text("old\n")
     sandbox.initialise()
     first = record_names(sandbox.run_ok("create").stdout)[0]
-    for name in (b"\xff\xfe-bytes", b"\xff-x", b"?-x", b"tab\tname"):
-        (sandbox.source / os.fsdecode(name)).write_text("new\n")
-    expected = {(os.fsdecode(b"\xff\xfe-bytes"), "added"), (os.fsdecode(b"\xff-x"), "added"), ("?-x", "added"),
+    name(b"a\xff").write_text("changed\n")
+    name(b"b?").write_text("changed\n")
+    name(b"gone\xff").unlink()
+    for raw in (b"\xff\xfe-bytes", b"\xff-x", b"?-x", b"tab\tname"):
+        name(raw).write_text("new\n")
+    expected = {(os.fsdecode(b"a\xff"), "modified"), ("b?", "modified"), (os.fsdecode(b"gone\xff"), "removed"),
+                (os.fsdecode(b"\xff\xfe-bytes"), "added"), (os.fsdecode(b"\xff-x"), "added"), ("?-x", "added"),
                 ("tab\\tname", "added")}
     live = sandbox.run_ok("diff", "--scratch", str(sandbox.root / "tmp"), first).stdout
     assert changes(live) == expected
@@ -512,3 +520,27 @@ def test_fish_completes_directories_after_initialise(tmp_path: Path) -> None:
     offered = subprocess.run(["fish", "--no-config", "-c", script], cwd=tmp_path, env=env,
                              capture_output=True, text=True, check=True).stdout.split()
     assert offered == ["subdir/", "subdir/"]
+
+
+def test_create_without_its_source_fails_and_still_creates_in_the_parent(sandbox: Sandbox) -> None:
+    inner = sandbox.source / "inner"
+    sandbox.initialise()
+    sandbox.initialise(inner)
+    with open(inner / CONFIG, "a") as config:
+        config.write("SOURCE_DIR=./missing\n")
+    for flags in (["-n"], []):
+        result = sandbox.run("create", *flags, cwd=inner)
+        assert (result.returncode, result.stdout) == (1, "") and "no directory ./missing" in result.stderr
+    assert sandbox.run_ok("list", cwd=inner).stdout == ""
+    assert len(record_names(sandbox.run_ok("list").stdout)) == 1
+
+
+def test_the_log_names_files_borg_could_not_read_and_not_its_messages(sandbox: Sandbox) -> None:
+    (sandbox.source / "C dir").mkdir()
+    (sandbox.source / "C dir/secret").write_text("unreadable\n")
+    (sandbox.source / "C dir/secret").chmod(0)
+    sandbox.initialise()
+    assert sandbox.run("create").returncode == 0
+    text = next((sandbox.home / ".local/state/archivectl").iterdir()).read_text()
+    assert "C dir/secret could not be read" in text
+    assert "changed while borg read it" not in text and "Errno" not in text
