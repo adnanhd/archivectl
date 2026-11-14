@@ -3,9 +3,11 @@ backup root, Borg base directory and source tree under $TMPDIR."""
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 from collections.abc import Iterator
@@ -22,6 +24,8 @@ TOOL = ROOT / "archivectl"
 CONFIG = ".borgbackup"
 CONFIGS = (".myrsyncbackup", ".borgbackup")
 NAME_FORMAT = "%Y-%m-%d_%H:%M:%S"
+# dedupctl as it was before archivectl, and the backuplib it used
+OLD_COMMIT, OLD_LIB_COMMIT = "af2fef1", "560f5db"
 
 settings.register_profile("tools", deadline=None, suppress_health_check=[HealthCheck.too_slow])
 settings.load_profile("tools")
@@ -43,13 +47,25 @@ def refuse_inside_repository(path: Path) -> None:
 
 
 def describe(path: Path) -> tuple[str, ...]:
-    """Type, mode and content hash or link target of PATH, no times."""
+    """Type, mode, and content hash and time or link target and time of PATH;
+    a directory's time is left out, since borg's lock files touch it."""
     status = path.lstat()
     if path.is_symlink():
-        return (str(path), "link", os.readlink(path))
+        return (str(path), "link", os.readlink(path), str(status.st_mtime_ns))
     if path.is_dir():
         return (str(path), "dir", oct(status.st_mode))
-    return (str(path), "file", oct(status.st_mode), hashlib.sha256(path.read_bytes()).hexdigest())
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return (str(path), "file", oct(status.st_mode), digest, str(status.st_mtime_ns))
+
+
+def export(repository: Path, commit: str, destination: Path) -> None:
+    """The tree of COMMIT in the git REPOSITORY, written into DESTINATION."""
+    archive = subprocess.run(["git", "archive", "--format=tar", commit], cwd=repository,
+                             capture_output=True, check=False)
+    if archive.returncode != 0:
+        pytest.skip(f"{commit} is not in {repository}: {archive.stderr.decode().strip()}")
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        tar.extractall(destination, filter="data")
 
 
 class Sandbox:
@@ -86,16 +102,16 @@ class Sandbox:
 
     def __exit__(self, kind: type[BaseException] | None, error: BaseException | None,
                  trace: TracebackType | None) -> None:
-        subprocess.run(["chmod", "-R", "u+w", str(self.root)], check=False)
+        subprocess.run(["chmod", "-R", "u+rwx", str(self.root)], check=False)
         shutil.rmtree(self.root)
 
-    def run(self, *args: str, cwd: Path | None = None, stdin: str = "") -> Result:
-        completed = subprocess.run([str(TOOL), *args], cwd=cwd or self.source, input=stdin,
+    def run(self, *args: str, cwd: Path | None = None, stdin: str = "", tool: Path = TOOL) -> Result:
+        completed = subprocess.run([str(tool), *args], cwd=cwd or self.source, input=stdin,
                                    capture_output=True, text=True, env=self.env, timeout=300)
         return Result(completed.returncode, completed.stdout, completed.stderr)
 
-    def run_ok(self, *args: str, cwd: Path | None = None, stdin: str = "") -> Result:
-        result = self.run(*args, cwd=cwd, stdin=stdin)
+    def run_ok(self, *args: str, cwd: Path | None = None, stdin: str = "", tool: Path = TOOL) -> Result:
+        result = self.run(*args, cwd=cwd, stdin=stdin, tool=tool)
         assert result.returncode == 0, f"{args}: {result.stderr}"
         return result
 
@@ -104,16 +120,15 @@ class Sandbox:
                        capture_output=True, timeout=300)
 
     def state(self) -> list[tuple[str, ...]]:
-        """Every path under home/, backups/ and src/, described without times."""
+        """Every path in the sandbox, Borg's own base directory included, described by describe."""
         entries = []
-        for top in (self.home, self.backups, self.source):
-            for directory, subdirectories, files in os.walk(top):
-                entries += [describe(Path(directory) / name) for name in subdirectories + files]
+        for directory, subdirectories, files in os.walk(self.root):
+            entries += [describe(Path(directory) / name) for name in subdirectories + files]
         return sorted(entries)
 
-    def initialise(self, directory: Path | None = None) -> None:
+    def initialise(self, directory: Path | None = None, tool: Path = TOOL, verb: str = "initialise") -> None:
         """Initialise DIRECTORY (src); small segments keep borg's free space check under 30 MB."""
-        self.run_ok("initialise", cwd=directory or self.source)
+        self.run_ok(verb, cwd=directory or self.source, tool=tool)
         self.borg("config", str(self.repository(directory)), "max_segment_size", "1048576")
 
     def populate(self) -> None:
@@ -122,11 +137,15 @@ class Sandbox:
         self.initialise(self.source / "inner")
         self.run_ok("create", cwd=self.source / "inner")
 
+    def config_value(self, name: str, directory: Path | None = None) -> str:
+        """NAME as the configuration of DIRECTORY (src) sets it, read the way the tool reads it."""
+        script = f'source {CONFIG} && printf %s "${name}"'
+        return subprocess.run(["bash", "-c", script], cwd=directory or self.source,
+                              capture_output=True, text=True, check=True).stdout
+
     def repository(self, directory: Path | None = None) -> Path:
         """The Borg repository of DIRECTORY (src)."""
-        text = ((directory or self.source) / CONFIG).read_text()
-        line = next(line for line in text.splitlines() if line.startswith("BORG_REPO="))
-        return Path(line.split("=", 1)[1].strip('"'))
+        return Path(self.config_value("BORG_REPO", directory))
 
     def fake_archive(self, moment: datetime) -> str:
         """An archive of src/plain in the repository of src, dated MOMENT by borg itself."""
@@ -134,6 +153,13 @@ class Sandbox:
         self.borg("create", "--timestamp", moment.strftime("%Y-%m-%dT%H:%M:%S"),
                   f"{self.repository()}::{name}", ".", cwd=self.source / "plain")
         return name
+
+    def old_tool(self) -> Path:
+        """dedupctl at OLD_COMMIT with its lib at OLD_LIB_COMMIT, exported from git."""
+        old = self.root / "old"
+        export(ROOT, OLD_COMMIT, old)
+        export(ROOT / "lib", OLD_LIB_COMMIT, old / "lib")
+        return old / "dedupctl"
 
 
 def wait_for_a_new_second(taken: set[str]) -> None:
