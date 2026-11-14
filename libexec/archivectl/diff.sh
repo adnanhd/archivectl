@@ -33,58 +33,72 @@ run() {
 
 # archive_diff A B: one record per path whose content or type differs from
 # archive A to archive B; borg diff writes a byte that is not UTF-8 as ?, so
-# the records of paths holding ? are made from the listings of A and B
+# the records of paths holding ? are made from the listings of A and B. No
+# borg command runs inside $(...) of a pipeline, so each one's failure ends
+# the run with borg's status.
 archive_diff() {
-    local records line resolved
+    local records first second checks line
+    local -a output=()
     records=$(borg diff --json-lines "$BORG_REPO::$1" "$2" | LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON$AWK_BORG_DIFF")
     [ -n "$records" ] || return 0
     if ! LC_ALL=C grep -aq '?' <<<"$records"; then
         printf '%s\n' "$records"
         return 0
     fi
-    resolved=$({ raw_paths "$1" | sed 's/^/1\t/'; raw_paths "$2" | sed 's/^/2\t/'
-                 printf '%s\n' "$records" | sed 's/^/D\t/'; } | LC_ALL=C awk -F '\t' "$AWK_RAW_PATHS" |
-        while IFS= read -r line; do
-            case "$line" in
-                CHECK$'\t'*) resolve_shown "$1" "$2" "${line#CHECK$'\t'}" ;;
-                *) printf '%s\n' "$line" ;;
-            esac
-        done)
-    printf '%s\n' "$resolved"
+    first=$(raw_paths "$1")
+    second=$(raw_paths "$2")
+    checks=$({ sed 's/^/1\t/' <<<"$first"; sed 's/^/2\t/' <<<"$second"; sed 's/^/D\t/' <<<"$records"; } |
+        LC_ALL=C awk -F '\t' "$AWK_JSON$AWK_RAW_PATHS")
+    while IFS= read -r line; do
+        case "$line" in
+            CHECK$'\t'*) resolve_shown "$1" "$2" "${line#CHECK$'\t'}" ;;
+            ?*) output+=("$line") ;;
+        esac
+    done <<<"$checks"
+    printf '%s\n' "${output[@]}"
 }
 
-# resolve_shown A B CHECK: the records of the paths borg diff shows the same
-# way, CHECK being "shown<TAB>change<TAB>count<TAB>candidate...": each
-# candidate is in B only (added), in A only (removed), or in both and
-# different (modified); unless they are as many as borg's records, it dies
+# resolve_shown A B CHECK: add to output the records of the paths borg diff
+# shows the same way, CHECK being "shown<TAB>change<TAB>count<TAB>candidate...":
+# each candidate is in B only (added), in A only (removed), or in both with
+# another content (modified); unless they are as many as borg's records, it dies
 resolve_shown() {
-    local candidate
+    local candidate raw before after
     local -a fields chosen=()
     IFS=$'\t' read -r -a fields <<<"$3"
     for candidate in "${fields[@]:3}"; do
-        if [ "${fields[1]}" != modified ] || item_differs "$1" "$2" "$candidate"; then
-            chosen+=("$candidate")
+        if [ "${fields[1]}" = modified ]; then
+            printf -v raw '%b' "$candidate"
+            before=$(item_content "$1" "$raw")
+            after=$(item_content "$2" "$raw")
+            [ "$before" != "$after" ] || continue
         fi
+        chosen+=("$candidate")
     done
     [ ${#chosen[@]} -eq "${fields[2]}" ] ||
         die "borg shows several paths as ${fields[0]} and cannot tell which is ${fields[1]}; compare with diff --scratch."
     for candidate in "${chosen[@]}"; do
-        printf '%s\t%s\n' "$candidate" "${fields[1]}"
+        output+=("$candidate"$'\t'"${fields[1]}")
     done
 }
 
-# item_differs A B PATH: whether item PATH, escaped like a record, differs in
-# type, link target or content from archive A to archive B
-item_differs() {
-    local raw
-    printf -v raw '%b' "$3"
-    [ "$(item_print "$1" "$raw")" != "$(item_print "$2" "$raw")" ]
-}
-
-# item_print NAME PATH: type, link target and SHA-256 of item PATH of archive NAME
-item_print() {
-    PYTHONIOENCODING=unicode_escape borg list --format '{type}{TAB}{linktarget}{TAB}{sha256}{NUL}' \
-        "$BORG_REPO::$1" "pf:$2"
+# item_content NAME PATH: type, link target and SHA-256 of item PATH of
+# archive NAME; borg lists a hard link to an earlier item as a regular file
+# with that item's path as link target and no content, so its content is
+# taken from that item
+item_content() {
+    local listed
+    local -a field
+    listed=$(PYTHONIOENCODING=unicode_escape borg list --format '{type}{NUL}{linktarget}{NUL}{sha256}{NUL}' \
+        "$BORG_REPO::$1" "pf:$2" | LC_ALL=C awk "$AWK_ESCAPE$AWK_JSON$AWK_BORG_PATHS") || return
+    mapfile -t field <<<"$listed"
+    if [ "${field[0]}" = - ] && [ -n "${field[1]:-}" ]; then
+        local master
+        printf -v master '%b' "${field[1]}"
+        item_content "$1" "$master"
+        return
+    fi
+    printf '%s\t%s\t%s\n' "${field[0]}" "${field[1]:-}" "${field[2]:-}"
 }
 
 # raw_paths NAME: the path of every item of archive NAME, in borg's order,
@@ -101,24 +115,6 @@ raw_paths() {
 # and every path borg shows that way that is in B only (added), in A only
 # (removed) or in both (modified).
 AWK_RAW_PATHS='
-function shown(s,    out, i, n, b, c, need, j, ok) {
-    if (s !~ /[\200-\377]/) return s
-    out = ""; n = length(s)
-    for (i = 1; i <= n; i++) {
-        b = byte[substr(s, i, 1)]
-        if (b < 128) { out = out substr(s, i, 1); continue }
-        need = (b >= 194 && b <= 223) ? 1 : (b >= 224 && b <= 239) ? 2 : (b >= 240 && b <= 244) ? 3 : 0
-        ok = need > 0 && i + need <= n
-        for (j = 1; ok && j <= need; j++) { c = byte[substr(s, i + j, 1)]; if (c < 128 || c > 191) ok = 0 }
-        if (ok && need >= 2) {
-            c = byte[substr(s, i + 1, 1)]
-            if ((b == 224 && c < 160) || (b == 237 && c > 159) || (b == 240 && c < 144) || (b == 244 && c > 143)) ok = 0
-        }
-        if (ok) { out = out substr(s, i, need + 1); i += need } else out = out "?"
-    }
-    return out
-}
-BEGIN { for (i = 1; i < 256; i++) byte[sprintf("%c", i)] = i }
 $1 == "1" { first[$2]; order[++n] = $2; next }
 $1 == "2" { second[$2]; if (!($2 in first)) order[++n] = $2; next }
 index($2, "?") == 0 { print $2 "\t" $3; next }
