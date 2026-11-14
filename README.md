@@ -1,122 +1,34 @@
-# dedupctl
+# archivectl
 
-A command-line tool for managing [BorgBackup](https://www.borgbackup.org/) repositories with encryption, compression, and incremental archives.
+Encrypted, compressed, deduplicated archives of a directory tree with [BorgBackup](https://www.borgbackup.org/), one Borg repository per backed-up directory.
 
-## Features
+## Commands
 
-- Initialize a Borg backup repository with encryption (repokey)
-- Create new backup archives (with lz4 compression and exclude support)
-- Prune old archives (interactive or option-based: `--last`, `--first`, `--older`, `--newer`, `--all`)
-- Mount, extract, and check repository integrity
-- Compare (diff) archives (including live state vs snapshot)
-- View logs and list archives
+| Command | Does |
+|---------|------|
+| `initialise [-n] [<path>]` | Make a directory a backup source: write its `.borgbackup`, initialise its repository (repokey). `init` is an alias. |
+| `create [-n]` | Archive the source into a new archive (lz4) and print its record. |
+| `list [--older N] [--newer N] [--first N] [--last N]` | Print one record per archive, oldest first: `name<TAB>date<TAB>size`. |
+| `delete [-n]` | Delete the archives whose names begin the lines on standard input. |
+| `restore [-n] [--to <dir> \| --mount <dir>] <name> [<path>...]` | Extract an archive, or paths in it, into the source or `<dir>`, or mount it. |
+| `diff <name> [<name2>]` | Print one record per changed path, `path<TAB>added\|removed\|modified`, from `<name>` to `<name2>` or to the live source. |
+| `check` | Check the repository with `borg check`. |
 
-## Repository Structure
-
-```
-dedupctl/
-├── dedupctl                    # Main script
-├── lib/                       # Shared libraries (git submodule)
-│   ├── common.sh
-│   └── prune.sh
-├── libexec/dedupctl/           # Command modules
-│   ├── init.sh
-│   ├── backup.sh
-│   ├── prune.sh
-│   ├── mount.sh
-│   ├── extract.sh
-│   ├── check.sh
-│   ├── diff.sh
-│   ├── size.sh
-│   ├── log.sh
-│   └── list.sh
-├── completions/
-│   ├── bash/dedupctl.bash
-│   └── fish/dedupctl.fish
-├── Makefile
-└── README.md
-```
-
-## Installation
+Selecting and acting are separate: `list` prints records, `delete` reads them.
 
 ```bash
-git clone --recurse-submodules git@github.com:adnanhd/dedupctl.git
-cd dedupctl
-make install
+archivectl list --older 30 | archivectl delete -n   # what would go
+archivectl list --older 30 | archivectl delete
+archivectl restore --to /tmp/old "$(archivectl list --last 1 | cut -f1)" notes.txt
 ```
 
-### Custom Install Location
+Standard output carries records only, one per line, tab-separated, name first; messages, summaries and borg's own output go to standard error, and an empty answer prints nothing. Every command that writes takes `-n`, which reports what it would do and writes nothing. A write's log goes to `${XDG_STATE_HOME:-~/.local/state}/archivectl/<repository>.log`. `delete` does not run `borg compact`, which frees the space.
 
-```bash
-make PREFIX=/usr/local install
-```
-
-### What Gets Installed
-
-| Component | Default Location |
-|-----------|------------------|
-| Script (`dedupctl`) | `~/.local/bin/` |
-| Libraries (`lib/*.sh`) | `~/.local/lib/dedupctl/` |
-| Command modules (`libexec/`) | `~/.local/libexec/dedupctl/` |
-| Bash completions | `~/.local/share/bash-completion/completions/` |
-| Fish completions | `~/.config/fish/completions/` |
-| Zsh completions | `~/.local/share/zsh/site-functions/` |
-| Manual pages | `~/.local/share/man/man1/`, `~/.local/share/man/man5/` |
-
-### Manual Pages and Zsh Completion
-
-`man dedupctl` documents every command and option, and `man 5 dedupctl.borgbackup` the configuration file. man-db finds `~/.local/share/man` from `~/.local/bin` on `PATH`. Zsh has `/usr/local/share/zsh/site-functions` on its default `fpath`; for `~/.local`, add `fpath=(~/.local/share/zsh/site-functions $fpath)` before `compinit`.
-
-The section-1 pages and the zsh completion are generated from the source by `scripts/gen-docs.py`, which reads the dispatcher, `libexec/` and `lib/` and never runs the tools; it also prints where the hand-written bash and fish completions disagree with the code. Rerun it after changing a command or an option:
-
-```bash
-python3 scripts/gen-docs.py
-```
-
-The prose of each page is in `man/<command>.1.in`; the section-5 pages are written by hand.
-
-### Uninstall
-
-```bash
-make uninstall
-```
-
-## Usage
-
-```bash
-# Initialize a backup repository
-dedupctl init /path/to/your/project
-
-# Create a backup
-dedupctl backup [--dry-run]
-
-# Prune old archives
-dedupctl prune                 # Interactive mode
-dedupctl prune --last 3        # Remove newest 3
-dedupctl prune --first 3       # Remove oldest 3
-dedupctl prune --older 30      # Remove older than 30 days
-dedupctl prune --newer 7       # Remove newer than 7 days
-dedupctl prune --all           # Remove all
-
-# Mount an archive
-dedupctl mount [<mount_point>] [<archive>]
-
-# Extract an archive
-dedupctl extract [<destination>] [<archive>]
-
-# Compare archives
-dedupctl diff                  # Press Enter for current state vs archive
-
-# Other commands
-dedupctl check                 # Verify repository integrity
-dedupctl size                  # Show archive size info
-dedupctl log                   # View backup logs
-dedupctl list                  # List all archives
-```
+`man archivectl` documents every command and option, and `man 5 archivectl.borgbackup` the configuration file.
 
 ## Configuration
 
-Configuration is stored in `.borgbackup` in your project root:
+`.borgbackup` in the backed-up directory, written by `initialise`:
 
 ```bash
 SOURCE_DIR="./"
@@ -124,20 +36,36 @@ BORG_REPO="/path/to/borg/repository"
 # Optional: EXCLUDES=(".cache" "node_modules" "*.log")
 ```
 
-### Default Excludes
+Without `EXCLUDES`, `.cache`, `tmp` and `__pycache__` are left out. `initialise` puts the repository under `BORG_BACKUP_ROOT` (default `~/.borg_backups`); borg reads its passphrase from `BORG_PASSPHRASE` or `BORG_PASSCOMMAND`.
 
-By default, the following are excluded:
-- `.cache`
-- `tmp`
-- `__pycache__`
+## Installation
 
-Override by defining an `EXCLUDES` array in your config file.
+```bash
+git clone --recurse-submodules git@github.com:adnanhd/archivectl.git
+cd archivectl
+make install                  # PREFIX=~/.local by default
+make PREFIX=/usr DESTDIR=pkg install
+make uninstall
+```
 
-## Environment Variables
+| Component | Installed to |
+|-----------|--------------|
+| `archivectl` | `PREFIX/bin/` |
+| command modules and `lib/common.sh` | `PREFIX/lib/archivectl/` |
+| completions | `PREFIX/share/bash-completion/completions/`, `PREFIX/share/fish/vendor_completions.d/`, `PREFIX/share/zsh/site-functions/` |
+| manual pages | `PREFIX/share/man/man1/`, `PREFIX/share/man/man5/` |
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BORG_BACKUP_ROOT` | `~/.borg_backups` | Root directory for Borg repositories |
+The script finds its modules in the source tree (`libexec/archivectl/`, `lib/`) or under `PREFIX/lib/archivectl/`. `lib/` is the submodule [backuplib](https://github.com/adnanhd/backuplib). `diff` against the live source also needs rsync.
+
+The section-1 page and the three completions are generated from the source by `scripts/gen-docs.py`, which reads the dispatcher, `libexec/` and `lib/` and never runs the tool; rerun it after changing a command or an option. The prose of the page is in `man/archivectl.1.in`; the section-5 page is written by hand.
+
+## Tests
+
+```bash
+make test
+```
+
+runs the pytest and Hypothesis suite in `tests/` against borg: every run gets a scratch HOME, state directory, Borg base directory, backup root and source tree under `$TMPDIR`. It checks that `delete` reads back unchanged what `list` prints, that `-n` writes nothing for every write command and option, that `delete` with no input does nothing, and that `list` prints records only. It takes about three minutes.
 
 ## License
 
