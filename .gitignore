@@ -1,3 +1,6 @@
 .myrsyncbackup
 CLAUDE.md
 .claude/
+.hypothesis/
+.pytest_cache/
+__pycache__/
