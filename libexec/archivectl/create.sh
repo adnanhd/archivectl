@@ -1,11 +1,37 @@
 # archivectl create: archive the source into a new archive
 
+show_help() {
+    cat <<'HELP'
+Usage:
+  archivectl create [-n] [--stats]
+
+Archive the source into a new archive, compressed with lz4, and print its
+record as list prints it; standard error gets one line for it. The
+archive gets the number after the last one given; archives named by
+versions before numbers get theirs first. A parent directory's
+repository, if there is one, is then archived with the same options.
+
+Options:
+  -n, --dry-run  Report what would be renamed and archived and write
+                 nothing, here or in a parent repository.
+  --stats        Also print borg's statistics of the archive on standard
+                 error.
+HELP
+    exit 0
+}
+
 run() {
-    local name status=0 parent=0
-    parse_dry_run create "$@"
-    enter_repo SOURCE_DIR BORG_REPO
-    name=$(date '+%Y-%m-%d_%H:%M:%S')
-    require_free_name "$name"
+    local arg status=0 parent=0 STATS=false
+    DRY_RUN=false
+    for arg in "$@"; do
+        case "$arg" in
+            -n|--dry-run) DRY_RUN=true ;;
+            --stats) STATS=true ;;
+            -h|--help) show_help ;;
+            *) die "create: unknown argument '$arg'" $EXIT_INVALID_ARGS ;;
+        esac
+    done
+    enter_repository SOURCE_DIR BORG_REPO
     build_exclude_params borg
     # borg runs in SOURCE_DIR, entered here, so that a failure to enter it
     # is not taken for one of borg's
@@ -14,12 +40,14 @@ run() {
         say "$REPO_ROOT has no directory $SOURCE_DIR it can read, so no archive is made"
         status=1
     elif [ "$DRY_RUN" = true ]; then
-        say "would create archive $name of $REPO_ROOT"
-        borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . >&2 || status=$?
+        number_archives
+        next_number
+        say "would create archive $NUMBER of $REPO_ROOT"
+        borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$NUMBER" . >&2 || status=$?
         ! is_warning "$status" || status=0
         cd -- "$REPO_ROOT"
     else
-        archive_source "$name"
+        archive_source
     fi
     create_in_parent "$@" || parent=$?
     [ "$status" -eq 0 ] || return "$status"
@@ -31,39 +59,50 @@ is_warning() {
     [ "$1" -eq 1 ] || { [ "$1" -ge 100 ] && [ "$1" -le 127 ]; }
 }
 
-# archive_source NAME: run borg create for archive NAME and set status; on
-# a warning the archive is kept, on an error dropped if this run made it
+# archive_source: take the next number, run borg create for its archive
+# and set status; on a warning the archive is kept, on an error dropped if
+# this run made it
 archive_source() {
+    local name
     open_log
+    lock_sequence
+    number_archives
+    next_number
+    name="${NUMBER}_$(date '+%Y-%m-%d_%H%M%S')"
+    printf '%s\n' "$NUMBER" >"$SEQUENCE"
+    unlock_sequence
     BORG_OUTPUT=$(mktemp "${LOG_FILE%.log}.borg.XXXXXX")
     trap 'rm -f "$BORG_OUTPUT"' EXIT
     # status is borg's own, PIPESTATUS[0]; --log-json keeps the file status
     # lines (C: changed while read, E: not read) apart from borg's messages,
-    # and the reader shows them as text
+    # and the reader shows them as text, the statistics only with --stats;
+    # drop_archive reads the fingerprint in them
     if BORG_EXIT_CODES=modern borg create --log-json --stats --list --filter=CE --compression lz4 \
-            "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$1" . 2>&1 |
-        tee "$BORG_OUTPUT" | LC_ALL=C awk "$AWK_JSON$AWK_BORG_LOG" >&2; then
+            "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . 2>&1 |
+        tee "$BORG_OUTPUT" | STATS="$STATS" LC_ALL=C awk "$AWK_JSON$AWK_BORG_LOG" >&2; then
         status=0
     else
         status=${PIPESTATUS[0]}
     fi
     cd -- "$REPO_ROOT"
     if is_warning "$status"; then
-        log_skipped_files "$1" "$status"
+        log_skipped_files "$name" "$status"
         status=0
     fi
     if [ "$status" -eq 0 ]; then
-        say "created archive $1 of $REPO_ROOT"
-        archive_dates | NAME="$1" awk -F '\t' '$1 == ENVIRON["NAME"]' | with_sizes
+        say "created archive $NUMBER of $REPO_ROOT"
+        archive_entries | NAME="$name" awk -F '\t' '$3 == ENVIRON["NAME"]' | with_sizes
     else
-        say "archive $1 of $REPO_ROOT failed (borg status $status)"
-        drop_archive "$1"
+        say "archive $NUMBER of $REPO_ROOT failed (borg status $status)"
+        drop_archive "$name"
     fi
 }
 
 # An awk program, run with LC_ALL=C, that shows borg's --log-json output as
-# text: each message, and each file status as "C path" or "E path"
+# text: each message, and each file status as "C path" or "E path"; the
+# statistics only with STATS=true in the environment
 AWK_BORG_LOG='
+/^\{"type": "log_message"/ && /"name": "borg\.output\.stats"/ && ENVIRON["STATS"] != "true" { next }
 /^\{"type": "(log_message|file_status)"/ {
     if (match($0, /"message": "([^"\\]|\\.)*"/)) print unjson(substr($0, RSTART + 12, RLENGTH - 13))
     else if (match($0, /"path": "([^"\\]|\\.)*"/)) {
@@ -76,19 +115,10 @@ AWK_BORG_LOG='
 }
 { print; fflush() }'
 
-# require_free_name NAME: die when the repository holds an archive NAME
-require_free_name() {
-    local known
-    known=$(archive_dates | cut -f1)
-    if LC_ALL=C grep -aqxF -e "$1" <<<"$known"; then
-        die "archive $1 exists already."
-    fi
-}
-
 # log_skipped_files NAME STATUS: log each file borg's file status lines name
 log_skipped_files() {
     local status path
-    say "archive $1 of $REPO_ROOT lacks or holds changed files borg named above (borg status $2)"
+    say "archive $NUMBER of $REPO_ROOT lacks or holds changed files borg named above (borg status $2)"
     while IFS=$'\t' read -r status path; do
         case "$status" in
             C) say "$path changed while borg read it" ;;
@@ -126,8 +156,8 @@ drop_archive() {
     local fingerprint known
     fingerprint=$(grep -ao 'Archive fingerprint: [0-9a-f]\{64\}' "$BORG_OUTPUT" | cut -d' ' -f3 || true)
     [ -n "$fingerprint" ] || return 0
-    known=$(archive_dates)
-    if LC_ALL=C grep -aqxF -e "$1"$'\t'"$fingerprint" <<<"$(cut -f1,3 <<<"$known")"; then
+    known=$(archive_entries)
+    if LC_ALL=C grep -aqxF -e "$1"$'\t'"$fingerprint" <<<"$(cut -f3,4 <<<"$known")"; then
         borg delete "$BORG_REPO::$1" >&2 || say "could not delete the failed archive $1"
     fi
 }

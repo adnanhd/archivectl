@@ -1,5 +1,21 @@
 # archivectl restore: extract an archive, or paths in it, or mount it
 
+show_help() {
+    cat <<'HELP'
+Usage:
+  archivectl restore [-n] [--to <dir> | --mount <dir>] <id> [<path>...]
+
+Extract archive <id>, its number or its full name, or only the given
+paths in it, into the source directory.
+
+Options:
+  -n, --dry-run    Report what would be extracted or mounted and write nothing.
+  --to <dir>       Extract into <dir> instead.
+  --mount <dir>    Mount the archive at <dir> instead.
+HELP
+    exit 0
+}
+
 run() {
     local name="" target="" mount="" DRY_RUN=false path
     local -a paths=()
@@ -16,7 +32,7 @@ run() {
                 mount=$(realpath -m -- "$2")
                 shift
                 ;;
-            -h|--help) usage 0 ;;
+            -h|--help) show_help ;;
             -*) die "restore: unknown option '$1'" $EXIT_INVALID_ARGS ;;
             *)
                 path="${1#/}"
@@ -25,14 +41,14 @@ run() {
         esac
         shift
     done
-    [ -n "$name" ] || die "restore needs an archive name." $EXIT_INVALID_ARGS
+    [ -n "$name" ] || die "restore needs an archive id." $EXIT_INVALID_ARGS
     [ -z "$target" ] || [ -z "$mount" ] || die "--to and --mount exclude each other." $EXIT_INVALID_ARGS
-    enter_repo SOURCE_DIR BORG_REPO
+    enter_repository SOURCE_DIR BORG_REPO
     require_archive "$name"
     if [ -n "$mount" ]; then
-        mount_archive "$name" "$mount" "${paths[@]}"
+        mount_archive "${NAMES[0]}" "$mount" "${paths[@]}"
     else
-        extract_archive "$name" "${target:-$(realpath -m -- "$SOURCE_DIR")}" "${paths[@]}"
+        extract_archive "${NAMES[0]}" "${target:-$(realpath -m -- "$SOURCE_DIR")}" "${paths[@]}"
     fi
 }
 
@@ -41,14 +57,14 @@ extract_archive() {
     local name="$1" target="$2"
     shift 2
     if [ "$DRY_RUN" = true ]; then
-        say "would restore archive $name into $target"
+        say "would restore archive ${NUMBERS[0]} into $target"
         borg extract --dry-run --list "$BORG_REPO::$name" "$@" >&2
         return 0
     fi
     open_log
     mkdir -p "$target"
     ( cd "$target" && borg extract "$BORG_REPO::$name" "$@" ) >&2
-    say "restored archive $name into $target"
+    say "restored archive ${NUMBERS[0]} into $target"
 }
 
 # mount_archive NAME DIR [PATH...]: mount archive NAME, or PATHs in it, at DIR
@@ -56,11 +72,11 @@ mount_archive() {
     local name="$1" mount="$2"
     shift 2
     if [ "$DRY_RUN" = true ]; then
-        say "would mount archive $name at $mount"
+        say "would mount archive ${NUMBERS[0]} at $mount"
         return 0
     fi
     open_log
     mkdir -p "$mount"
     borg mount "$BORG_REPO::$name" "$mount" "$@"
-    say "mounted archive $name at $mount; unmount it with borg umount $mount"
+    say "mounted archive ${NUMBERS[0]} at $mount; unmount it with borg umount $mount"
 }

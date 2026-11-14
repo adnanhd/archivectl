@@ -1,5 +1,22 @@
 # archivectl diff: the paths that differ from an archive to another, or to the live source
 
+show_help() {
+    cat <<'HELP'
+Usage:
+  archivectl diff [--scratch <dir>] <id> [<id2>]
+
+Print one record per path whose content or type differs from archive <id>
+to <id2>: the path, then added, removed or modified. Without <id2> the
+live source is compared, what EXCLUDES leaves out left out. An id is an
+archive's number or its full name.
+
+Options:
+  --scratch <dir>  Extract archive <id> under <dir> to compare it with the
+                   live source; that comparison needs it.
+HELP
+    exit 0
+}
+
 run() {
     local scratch=""
     local -a names=()
@@ -10,24 +27,25 @@ run() {
                 scratch=$(realpath -m -- "$2")
                 shift
                 ;;
-            -h|--help) usage 0 ;;
+            -h|--help) show_help ;;
             -*) die "diff: unknown option '$1'" $EXIT_INVALID_ARGS ;;
             *) names+=("$1") ;;
         esac
         shift
     done
     [ ${#names[@]} -ge 1 ] && [ ${#names[@]} -le 2 ] ||
-        die "diff takes one or two archive names." $EXIT_INVALID_ARGS
+        die "diff takes one or two archive ids." $EXIT_INVALID_ARGS
     [ ${#names[@]} -eq 2 ] || [ -d "$scratch" ] ||
         die "comparing with the live source extracts the archive: name a directory with room for it, --scratch <dir>." $EXIT_INVALID_ARGS
-    enter_repo SOURCE_DIR BORG_REPO
+    enter_repository SOURCE_DIR BORG_REPO
     require_archive "${names[@]}"
     if [ ${#names[@]} -eq 2 ]; then
-        archive_diff "${names[0]}" "${names[1]}"
+        # one archive named twice compares with itself
+        archive_diff "${NAMES[0]}" "${NAMES[1]:-${NAMES[0]}}"
     else
         [[ "$scratch/" != "$(realpath -- "$SOURCE_DIR")"/* ]] ||
             die "--scratch must be outside the source $(realpath -- "$SOURCE_DIR")." $EXIT_INVALID_ARGS
-        live_diff "${names[0]}" "$scratch"
+        live_diff "${NAMES[0]}" "$scratch"
     fi
 }
 
