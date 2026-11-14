@@ -15,9 +15,16 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 PROG=archivectl
 CONFIG=.borgbackup
 
-# In the source tree the modules are in libexec/ and the library in lib/;
-# installed, both are in PREFIX/lib/archivectl/.
-if [ -d "$SCRIPT_DIR/libexec/$PROG" ]; then
+# make install writes its LIBDIR here
+INSTALLED_MODULE_DIR=""
+
+# Installed, the modules and the library are in LIBDIR; in the source tree
+# the modules are in libexec/ and the library in lib/; a copy made by hand
+# looks in PREFIX/lib/archivectl/.
+if [ -n "$INSTALLED_MODULE_DIR" ]; then
+    MODULE_DIR="$INSTALLED_MODULE_DIR"
+    LIB_DIR="$MODULE_DIR"
+elif [ -d "$SCRIPT_DIR/libexec/$PROG" ]; then
     MODULE_DIR="$SCRIPT_DIR/libexec/$PROG"
     LIB_DIR="$SCRIPT_DIR/lib"
 else
