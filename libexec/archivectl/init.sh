@@ -143,7 +143,7 @@ store_passphrase() {
     check_passphrase "$BORG_REPO"
     keep_passphrase
     printf 'BORG_PASSCOMMAND=%q\n' "pass show $(quoted "$entry")" >>"$CONFIG"
-    say "kept the passphrase of $BORG_REPO in pass as $entry; $REPO_ROOT/$CONFIG reads it from there"
+    say "$REPO_ROOT/$CONFIG reads it from there"
 }
 
 # quoted TEXT: TEXT in single quotes, for the shell and for borg, which splits BORG_PASSCOMMAND as a shell would
