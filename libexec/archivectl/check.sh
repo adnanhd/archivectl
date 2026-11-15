@@ -5,8 +5,7 @@ show_help() {
 Usage:
   archivectl check
 
-Check the integrity of the repository and its archives with borg check,
-whose report goes to standard error; its status is borg's.
+Check the repository with borg check; the status is borg's.
 HELP
     exit 0
 }

@@ -3,26 +3,17 @@
 show_help() {
     cat <<'HELP'
 Usage:
-  archivectl init [-n] [--repo <url>] [--no-pass] [<path>]
-  archivectl init [-n] --store-passphrase [<path>]
+  archivectl init [-n] [--repo <url>] [--no-pass] [--store-passphrase] [<path>]
 
-Make <path>, or the current directory, a backup source: write its
-.borgbackup and initialise its Borg repository, encrypted with repokey,
-under $BORG_BACKUP_ROOT and named after the directory's path, or at the
-location --repo gives; a repository there already is used as it is.
-The passphrase is read once, or taken from BORG_PASSPHRASE, and kept in
-pass as archivectl/<name>; .borgbackup then reads it with
-BORG_PASSCOMMAND, so that no command asks for it again. initialise is
-an alias.
+Make <path>, or the current directory, a backup source with an encrypted
+Borg repository under $BORG_BACKUP_ROOT, or at <url>, and keep its
+passphrase in pass. initialise is an alias.
 
 Options:
   -n, --dry-run       Report what would be written and write nothing.
-  --repo <url>        Use the repository at <url>, ssh://user@host/path,
-                      user@host:path or a local path.
-  --no-pass           Keep the passphrase out of pass; borg asks for it.
-  --store-passphrase  For the source here or above, initialised already,
-                      read its passphrase, check it with borg, keep it in
-                      pass and add BORG_PASSCOMMAND to its .borgbackup.
+  --repo <url>        Use the repository at <url>, ssh:// or user@host:path.
+  --no-pass           Keep the passphrase out of pass.
+  --store-passphrase  Keep the passphrase of an older source in pass.
 HELP
     exit 0
 }
@@ -88,6 +79,7 @@ repository_for() {
 # passphrase in pass unless use_pass=false
 initialise_source() {
     local exists=false passcommand=""
+    local -a settings
     if repository_exists "$repo"; then
         exists=true
     fi
@@ -119,11 +111,11 @@ initialise_source() {
     else
         borg init --encryption=repokey --make-parent-dirs "$repo" >&2
     fi
-    if [ -n "$passcommand" ]; then
-        write_config "$REPO_ROOT/$CONFIG" SOURCE_DIR=./ BORG_REPO="$repo" BORG_PASSCOMMAND="$passcommand"
-    else
-        write_config "$REPO_ROOT/$CONFIG" SOURCE_DIR=./ BORG_REPO="$repo"
-    fi
+    settings=(SOURCE_DIR=./ BORG_REPO="$repo")
+    [ -z "$passcommand" ] || settings+=(BORG_PASSCOMMAND="$passcommand")
+    # the ssh command that reached another host keeps reaching it
+    ! is_remote "$repo" || [ -z "${BORG_RSH:-}" ] || settings+=(BORG_RSH="$BORG_RSH")
+    write_config "$REPO_ROOT/$CONFIG" "${settings[@]}"
     say "initialised $REPO_ROOT, Borg repository $repo"
 }
 

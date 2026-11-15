@@ -5,14 +5,11 @@ show_help() {
 Usage:
   archivectl diff [--scratch <dir>] <id> [<id2>]
 
-Print one record per path whose content or type differs from archive <id>
-to <id2>: the path, then added, removed or modified. Without <id2> the
-live source is compared, what EXCLUDES leaves out left out. An id is an
-archive's number or its full name.
+Print one record per path that differs from archive <id> to <id2>, or to
+the live source: the path, then added, removed or modified.
 
 Options:
-  --scratch <dir>  Extract archive <id> under <dir> to compare it with the
-                   live source; that comparison needs it.
+  --scratch <dir>  Where comparing with the live source extracts it.
 HELP
     exit 0
 }
@@ -35,10 +32,10 @@ run() {
     done
     [ ${#names[@]} -ge 1 ] && [ ${#names[@]} -le 2 ] ||
         die "diff takes one or two archive ids." $EXIT_INVALID_ARGS
-    [ ${#names[@]} -eq 2 ] || [ -d "$scratch" ] ||
-        die "comparing with the live source extracts the archive: name a directory with room for it, --scratch <dir>." $EXIT_INVALID_ARGS
     enter_repository SOURCE_DIR BORG_REPO
     require_archive "${names[@]}"
+    [ ${#names[@]} -eq 2 ] || [ -d "$scratch" ] ||
+        die "comparing with the live source extracts the archive: name a directory with room for it, --scratch <dir>." $EXIT_INVALID_ARGS
     if [ ${#names[@]} -eq 2 ]; then
         # one archive named twice compares with itself
         archive_diff "${NAMES[0]}" "${NAMES[1]:-${NAMES[0]}}"

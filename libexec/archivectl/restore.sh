@@ -5,13 +5,12 @@ show_help() {
 Usage:
   archivectl restore [-n] [--to <dir> | --mount <dir>] <id> [<path>...]
 
-Extract archive <id>, its number or its full name, or only the given
-paths in it, into the source directory.
+Extract archive <id>, or the given paths in it, into the source.
 
 Options:
-  -n, --dry-run    Report what would be extracted or mounted and write nothing.
-  --to <dir>       Extract into <dir> instead.
-  --mount <dir>    Mount the archive at <dir> instead.
+  -n, --dry-run  Report what would be done and write nothing.
+  --to <dir>     Extract into <dir> instead.
+  --mount <dir>  Mount the archive at <dir> instead.
 HELP
     exit 0
 }

@@ -5,11 +5,8 @@ show_help() {
 Usage:
   archivectl status
 
-Print one record of the backup source of the current directory: the
-source, its repository, the number of archives, the number and date of
-the newest, and the bytes the repository takes, deduplicated and
-compressed. With no source here it says so on standard error and exits
-with status 1. archivectl with no command prints it before the help.
+Print one record of the backup source here: source, repository, number
+of archives, number and date of the newest, and the bytes it takes.
 HELP
     exit 0
 }

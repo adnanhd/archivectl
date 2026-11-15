@@ -54,7 +54,7 @@ usage: archivectl [-C <dir>] <command> [<options>]
                                 print the paths that differ
   check                         check the repository with borg check
 
-  -C <dir> run in <dir>; -n report only, write nothing; -h this help
+  -C <dir> run in <dir>; -n report only, write nothing; -h print this help
 
   archivectl init && archivectl create
   archivectl list --older 30 | archivectl delete -n
@@ -304,10 +304,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         -h|--help) usage 0 ;;
-        -*)
-            echo "$PROG: unknown option '$1'" >&2
-            usage "$EXIT_INVALID_ARGS" >&2
-            ;;
+        -*) die "unknown option '$1'; see $PROG --help" $EXIT_INVALID_ARGS ;;
         *) break ;;
     esac
 done
@@ -322,9 +319,6 @@ shift
 case "$COMMAND" in
     init|initialise) source "$MODULE_DIR/init.sh" ;;
     create|status|list|delete|restore|diff|check) source "$MODULE_DIR/$COMMAND.sh" ;;
-    *)
-        echo "$PROG: unknown command '$COMMAND'" >&2
-        usage 1 >&2
-        ;;
+    *) die "unknown command '$COMMAND'; see $PROG --help" $EXIT_INVALID_ARGS ;;
 esac
 run "$@"

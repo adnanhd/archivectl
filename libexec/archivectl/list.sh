@@ -5,15 +5,14 @@ show_help() {
 Usage:
   archivectl list [--older N] [--newer N] [--first N] [--last N]
 
-Print one record per archive, oldest first: its number, the date it was
-made as YYYY-MM-DD HH:MM:SS, and its original size in bytes. An archive
-not numbered yet shows the number the next create or delete gives it.
+Print one record per archive, oldest first: number, date, original size
+in bytes. The age options select first, then --first and --last.
 
 Options:
   --older N  Only the archives older than N days.
   --newer N  Only the archives newer than N days.
-  --first N  Then only the oldest N of those.
-  --last N   Then only the newest N of those.
+  --first N  Then only the oldest N.
+  --last N   Then only the newest N.
 HELP
     exit 0
 }

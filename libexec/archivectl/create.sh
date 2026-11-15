@@ -5,17 +5,12 @@ show_help() {
 Usage:
   archivectl create [-n] [--stats]
 
-Archive the source into a new archive, compressed with lz4, and print its
-record as list prints it; standard error gets one line for it. The
-archive gets the number after the last one given; archives named by
-versions before numbers get theirs first. A parent directory's
-repository, if there is one, is then archived with the same options.
+Archive the source into a new archive and print its record. A backup
+source in a parent directory is then archived too.
 
 Options:
-  -n, --dry-run  Report what would be renamed and archived and write
-                 nothing, here or in a parent repository.
-  --stats        Also print borg's statistics of the archive on standard
-                 error.
+  -n, --dry-run  Report what would be archived and write nothing.
+  --stats        Also print the statistics borg gives.
 HELP
     exit 0
 }

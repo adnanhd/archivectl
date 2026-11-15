@@ -5,15 +5,12 @@ show_help() {
 Usage:
   archivectl delete [-n] [<id>...]
 
-Delete the archives the ids name, each by its number or its full name.
-Without ids as arguments it reads them on standard input, the first field
-of every line, as list prints them, and does nothing without input. Ids
-as arguments while input is piped in, or none and a terminal as input,
-end it with status 2. Archives named by versions before numbers get
-their numbers first.
+Delete the archives given by number or name, or else those whose ids
+begin the lines on standard input, as list prints them. Ids and piped
+input together are refused. borg compact frees the space.
 
 Options:
-  -n, --dry-run  Report what would be renamed and deleted and change nothing.
+  -n, --dry-run  Report what would be deleted and delete nothing.
 HELP
     exit 0
 }
