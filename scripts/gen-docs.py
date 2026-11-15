@@ -516,8 +516,20 @@ def sentence(text: str) -> str:
     return text if not text or text[-1] in ".!?:)" else text + "."
 
 
-def tp(tag: str, desc: str) -> list[str]:
-    return [".TP", line(tag), line(esc(sentence(desc)))] if desc else [".TP", line(tag)]
+def tp(tag: str, desc: str, width: int = 0) -> list[str]:
+    head = f".TP {width}n" if width else ".TP"
+    return [head, line(tag), line(esc(sentence(desc)))] if desc else [head, line(tag)]
+
+
+def tight(items: list[str]) -> list[str]:
+    """ITEMS, a run of .TP entries, set without blank lines between them."""
+    return [".PD 0", *items, ".PD"] if items else []
+
+
+def tag_width(tags: list[str]) -> int:
+    """An indent, in ens, that keeps the widest of TAGS on the line of its description."""
+    shown = [len(re.sub(r"\\f[BIRP]|\\~|\\(?=-)", "", t).replace("\\-", "-")) for t in tags]
+    return min(max(shown, default=0) + 2, 24)
 
 
 def usage_tag(prog: str, s: str) -> str:
@@ -529,9 +541,10 @@ def usage_tag(prog: str, s: str) -> str:
 
 def render_entries(es: list[Entry], prog: str, usage: bool = False) -> list[str]:
     out: list[str] = []
+    width = 0 if usage else tag_width([e.tag for e in es])
     for e in es:
         tag = usage_tag(prog, e.tag) if usage else bold_opts(e.tag)
-        out += tp(tag, e.desc)
+        out += tp(tag, e.desc, width)
         if e.sub:
             out.append(".RS")
             for s in e.sub:
@@ -572,14 +585,18 @@ def synopsis(tool: Tool) -> str:
 
 def opt_lines(opts: list[Opt]) -> list[str]:
     out = []
+    tags = []
     for o in opts:
         tag = ", ".join(f"\\fB{esc(n)}\\fR" for n in o.names)
         if o.value:
             tag += ("=" if o.eq else "\\~") + f"\\fI{esc(o.metavar or 'VALUE')}\\fR"
+        tags.append(tag)
+    width = tag_width(tags)
+    for o, tag in zip(opts, tags):
         desc = o.desc or ("Print the help text and exit." if set(o.names) <= {"-h", "--help"}
                           else "Not described in the help text.")
-        out += tp(tag, desc)
-    return out
+        out += tp(tag, desc, width)
+    return tight(out)
 
 
 def render_body(lines: list[str], prog: str, documented: set[str]) -> list[str]:
@@ -613,8 +630,13 @@ def render_body(lines: list[str], prog: str, documented: set[str]) -> list[str]:
 
 
 def command_page(tool: Tool, c: Command, prose: dict[str, str]) -> list[str]:
-    out = [f'.SS "{esc(c.name)}"']
+    """A command's part of COMMANDS: its synopsis as the heading, its help
+    text, and its options as a tight list; an alias has none, its target's
+    text names it."""
     documented: set[str] = set()
+    if c.alias:
+        return []
+    out = [f'.SS "{esc(c.name)}"']
 
     def summary() -> list[str]:
         return [".PP", line(esc(sentence(c.summary)))] if c.summary else []
@@ -623,9 +645,13 @@ def command_page(tool: Tool, c: Command, prose: dict[str, str]) -> list[str]:
         title = next((ln for ln in pre if ln.strip()), "")
         rest_pre = paragraphs(pre[pre.index(title) + 1:] if title else pre)
         usage = [hs for hs in secs if hs[0].lower().startswith("usage")]
-        for _, lines in usage:
-            out += render_entries(entries(lines, usage=True), tool.prog, usage=True)
-        out += summary()
+        tags = [e.tag for _, lines in usage for e in entries(lines, usage=True)]
+        if tags:
+            out = [f'.SS "{esc(tags[0])}"']
+            for tag in tags[1:]:
+                out += [line(f"\\fB{esc(tag)}\\fR"), ".br"]
+        else:
+            out += summary()
         for para in rest_pre:
             out += [".PP", line(esc(para))]
         for _, lines in usage:
@@ -638,7 +664,7 @@ def command_page(tool: Tool, c: Command, prose: dict[str, str]) -> list[str]:
             if low.startswith("option"):
                 es = entries(lines)
                 documented |= {n for e in es for n in tag_names(e.tag)}
-                out += [".PP", "Options:"] + render_entries(es, tool.prog)
+                out += tight(render_entries(es, tool.prog))
                 for para in paragraphs(split_list(lines)[1]):
                     out += [".PP", line(esc(para))]
             elif low.startswith("example"):
@@ -651,16 +677,11 @@ def command_page(tool: Tool, c: Command, prose: dict[str, str]) -> list[str]:
     elif c.overview:
         e = entries([c.overview[0]], usage=True)[0]
         out += tp(usage_tag(tool.prog, f"{tool.prog} {e.tag}"), "")
-        if c.alias:
-            out += summary()
-        else:
-            out += render_body(c.overview[1:], tool.prog, documented)
+        out += render_body(c.overview[1:], tool.prog, documented)
     else:
         out += summary()
     if c.name in prose:
         out.append(prose.pop(c.name).rstrip("\n"))
-    if c.alias:
-        return out
     # what the code parses that the help text never mentions
     globals_ = {n for o in tool.global_opts for n in o.names}
     extra = [o for o in c.opts if not set(o.names) & (documented | globals_)]
@@ -670,7 +691,7 @@ def command_page(tool: Tool, c: Command, prose: dict[str, str]) -> list[str]:
             h = next((common[n] for n in o.names if n in common), None)
             if h is not None:
                 o.desc, o.metavar = o.desc or h.desc, o.metavar or h.metavar
-        out += [".PP", "Also parsed:" if documented else "Options:"] + opt_lines(extra)
+        out += [".PP", "Also parsed:"] + opt_lines(extra) if documented else opt_lines(extra)
     return out
 
 
