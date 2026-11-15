@@ -24,6 +24,7 @@ from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table
 # a record of list: number, date, size
 RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)")
 WRITE_VERBS = ["create", "delete", "init", "initialise", "restore"]
+OLD_TOOL = "dedupctl"
 OLD_NAMES = ["backup", "prune", "mount", "extract", "size", "log"]
 OPTIONS = options_table()
 REPOSITORY_PATHS = {"src": ["a.txt", "plain", "inner/b.txt"], "inner": ["b.txt", "sub"]}
@@ -174,17 +175,42 @@ def test_create_in_a_parent_keeps_stdout_to_this_repository(sandbox: Sandbox) ->
 def test_old_commands_are_gone(populated: Sandbox, name: str) -> None:
     before = populated.state()
     result = populated.run(name)
-    assert (result.returncode, result.stdout) == (1, "")
-    assert "unknown command" in result.stderr
-    assert populated.state() == before
-    assert not (ROOT / "dedupctl").exists()
-
-
-@pytest.mark.parametrize("command", sorted(OPTIONS))
-def test_unknown_option_is_refused(populated: Sandbox, command: str) -> None:
-    before = populated.state()
-    result = populated.run(command, "--no-such-option", stdin="x\n")
     assert (result.returncode, result.stdout) == (2, "")
+    assert result.stderr == f"{TOOL.name}: unknown command '{name}'; see {TOOL.name} --help\n"
+    assert populated.state() == before
+    assert not (ROOT / OLD_TOOL).exists()
+
+
+# A wrong invocation: arguments ({root} the sandbox), standard input, status, and what its one line says.
+WRONG = [
+    (["frobnicate"], None, 2, "unknown command 'frobnicate'; see"),
+    (["--frobnicate", "list"], None, 2, "unknown option '--frobnicate'; see"),
+    *[([command, "--no-such-option"], None, 2, "'--no-such-option'") for command in sorted(OPTIONS)],
+    (["restore", "99"], None, 1, "no such archive: 99"),
+    (["diff", "99"], None, 1, "no such archive: 99"),
+    (["delete", "99"], None, 1, "no such archive: 99"),
+    (["restore"], None, 2, "restore needs an archive id"),
+    (["restore", "abc"], None, 1, "no such archive: abc"),
+    (["list", "--older", "abc"], None, 2, "--older needs a number"),
+    (["list", "--first", "-3"], None, 2, "--first needs a number"),
+    *[([command, "extra"], None, 2, "'extra'") for command in ("create", "check", "status", "list")],
+    (["-C", "{root}/missing", "list"], None, 2, "cannot change into"),
+    (["init", "{root}/missing"], None, 2, "is not a directory"),
+    (["restore", "--to"], None, 2, "--to needs a directory"),
+    (["restore", "--mount"], None, 2, "--mount needs a directory"),
+    (["diff", "--scratch"], None, 2, "--scratch needs a directory"),
+    (["init", "--repo"], None, 2, "--repo needs a repository location"),
+    (["delete", "1"], "1\n", 2, "not both"),
+]
+
+
+@pytest.mark.parametrize("args, stdin, status, says", WRONG, ids=[" ".join(case[0]) for case in WRONG])
+def test_a_wrong_invocation_is_refused_in_one_line_and_changes_nothing(
+        populated: Sandbox, args: list[str], stdin: str | None, status: int, says: str) -> None:
+    before = populated.state()
+    result = populated.run(*[arg.format(root=populated.root) for arg in args], stdin=stdin)
+    assert (result.returncode, result.stdout) == (status, "")
+    assert result.stderr.count("\n") == 1 and says in result.stderr, result.stderr
     assert populated.state() == before
 
 
@@ -913,6 +939,8 @@ def test_a_repository_on_another_host_works_as_a_local_one(sandbox: Sandbox) -> 
     url = fake_ssh(sandbox)
     sandbox.run_ok("init", "--repo", f"{url}/papers")
     assert sandbox.config_value("BORG_REPO") == f"{url}/papers"
+    # later commands reach the host the way init did, with no BORG_RSH set
+    assert sandbox.config_value("BORG_RSH") == sandbox.env.pop("BORG_RSH")
     sandbox.borg("config", str(sandbox.root / "remote/papers"), "max_segment_size", "1048576")
     first = record_names(sandbox.run_ok("create").stdout)[0]
     (sandbox.source / "a.txt").write_text("changed\n")
@@ -925,7 +953,7 @@ def test_a_repository_on_another_host_works_as_a_local_one(sandbox: Sandbox) -> 
     sandbox.run_ok("delete", first)
     assert record_names(sandbox.run_ok("list").stdout) == [second]
     # a root that is a URL holds the repository of each source under its name
-    sandbox.env["BORG_BACKUP_ROOT"] = url
+    sandbox.env.update(BORG_BACKUP_ROOT=url, BORG_RSH=sandbox.config_value("BORG_RSH"))
     inner = sandbox.source / "inner"
     sandbox.run_ok("init", cwd=inner)
     name = storage_name("safe_name", inner)
@@ -960,3 +988,14 @@ def test_storage_goes_under_data_backup_when_data_is_mounted(sandbox: Sandbox) -
     root = "/data/backup/borg" if mounted else str(sandbox.home / ".borg_backups")
     result = sandbox.run_ok("init", "-n")
     assert f"initialise the Borg repository {root}/{storage_name('safe_name', sandbox.source)}" in result.stderr
+
+
+def test_the_manual_pages_fit_150_lines_at_80_columns() -> None:
+    if shutil.which("man") is None:
+        pytest.skip("man is not installed")
+    pages = sorted((ROOT / "man").glob("*.[15]"))
+    assert len(pages) == 2
+    for page in pages:
+        rendered = subprocess.run(["man", "-l", str(page)], env={**os.environ, "MANWIDTH": "80", "MANPAGER": "cat"},
+                                  capture_output=True, text=True, check=True).stdout
+        assert 0 < len(rendered.splitlines()) <= 150, page.name
