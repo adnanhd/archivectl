@@ -106,7 +106,7 @@ Report what would be deleted and delete nothing.
 .PD
 .SS "archivectl restore [\-n] [\-\-to <dir> | \-\-mount <dir>] <id> [<path>...]"
 .PP
-Extract archive <id>, or the given paths in it, into the source. A mount needs FUSE; borg umount <dir> unmounts it.
+Extract archive <id>, or the given paths in it, into the source, but no .borgbackup file. A mount needs FUSE; borg umount <dir> unmounts it.
 .PD 0
 .TP 15n
 \fB\-n\fR, \fB\-\-dry\-run\fR
@@ -210,9 +210,9 @@ is kept in
 .TP
 .I $XDG_STATE_HOME/archivectl/<name>.log
 .TQ
-.I $XDG_STATE_HOME/archivectl/<name>.sequence
+.I $XDG_STATE_HOME/archivectl/<repo>.sequence
 What every writing command did, readable by you only, and the last
-number given to an archive.
+number in the repository, <repo> written as <name> is.
 .TP
 .I $PASSWORD_STORE_DIR/archivectl/<name>.gpg
 The passphrase of a repository, as

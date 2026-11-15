@@ -5,8 +5,8 @@ show_help() {
 Usage:
   archivectl restore [-n] [--to <dir> | --mount <dir>] <id> [<path>...]
 
-Extract archive <id>, or the given paths in it, into the source. A mount
-needs FUSE; borg umount <dir> unmounts it.
+Extract archive <id>, or the given paths in it, into the source, but no
+.borgbackup file. A mount needs FUSE; borg umount <dir> unmounts it.
 
 Options:
   -n, --dry-run  Report what would be done and write nothing.
@@ -52,18 +52,20 @@ run() {
     fi
 }
 
-# extract_archive NAME DIR [PATH...]: extract archive NAME, or PATHs in it, into DIR
+# extract_archive NAME DIR [PATH...]: extract archive NAME, or PATHs in it,
+# into DIR, leaving out every configuration file, so that a restore never
+# turns the source back to the settings it had when NAME was made
 extract_archive() {
-    local name="$1" target="$2"
+    local name="$1" target="$2" config="re:(^|/)${CONFIG//./\\.}\$"
     shift 2
     if [ "$DRY_RUN" = true ]; then
         say "would restore archive ${NUMBERS[0]} into $target"
-        borg extract --dry-run --list "$BORG_REPO::$name" "$@" >&2
+        borg extract --dry-run --list --exclude "$config" "$BORG_REPO::$name" "$@" >&2
         return 0
     fi
     open_log
     mkdir -p "$target"
-    ( cd "$target" && borg extract "$BORG_REPO::$name" "$@" ) >&2
+    ( cd "$target" && borg extract --exclude "$config" "$BORG_REPO::$name" "$@" ) >&2
     say "restored archive ${NUMBERS[0]} into $target"
 }
 

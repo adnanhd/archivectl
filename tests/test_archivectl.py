@@ -229,6 +229,22 @@ def test_initialise_is_init(sandbox: Sandbox) -> None:
     assert (sandbox.source / CONFIG).read_text().count("BORG_REPO=") == 1
 
 
+def test_restore_leaves_every_configuration_as_it_is(sandbox: Sandbox) -> None:
+    sandbox.populate()
+    first = record_names(sandbox.run_ok("list").stdout)[0]
+    configs = [sandbox.source / CONFIG, sandbox.source / "inner" / CONFIG]
+    for config in configs:
+        config.write_text(config.read_text() + "# changed after the backup\n")
+    after = [config.read_text() for config in configs]
+    (sandbox.source / "a.txt").unlink()
+    sandbox.run_ok("restore", first)
+    assert [config.read_text() for config in configs] == after
+    assert (sandbox.source / "a.txt").read_text() == "outer\n"
+    elsewhere = sandbox.root / "elsewhere"
+    sandbox.run_ok("restore", "--to", str(elsewhere), first)
+    assert (elsewhere / "a.txt").read_text() == "outer\n" and not list(elsewhere.rglob(CONFIG))
+
+
 def test_restore_puts_files_back(sandbox: Sandbox) -> None:
     sandbox.populate()
     name = record_names(sandbox.run_ok("list").stdout)[0]
