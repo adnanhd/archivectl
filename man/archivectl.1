@@ -71,7 +71,7 @@ Archive the source into a new archive and print its record. A backup source in a
 .PD 0
 .TP 15n
 \fB\-n\fR, \fB\-\-dry\-run\fR
-Report what would be archived and write nothing.
+Only list, on standard error, what would be archived.
 .TP 15n
 \fB\-\-stats\fR
 Also print the statistics borg gives.
@@ -106,7 +106,7 @@ Report what would be deleted and delete nothing.
 .PD
 .SS "archivectl restore [\-n] [\-\-to <dir> | \-\-mount <dir>] <id> [<path>...]"
 .PP
-Extract archive <id>, or the given paths in it, into the source.
+Extract archive <id>, or the given paths in it, into the source. A mount needs FUSE; borg umount <dir> unmounts it.
 .PD 0
 .TP 15n
 \fB\-n\fR, \fB\-\-dry\-run\fR
@@ -120,7 +120,7 @@ Mount the archive at <dir> instead.
 .PD
 .SS "archivectl diff [\-\-scratch <dir>] <id> [<id2>]"
 .PP
-Print one record per path that differs from archive <id> to <id2>, or to the live source: the path, then added, removed or modified.
+Print one record per path that differs from archive <id> to <id2>, or to the live source: the path, then added, removed or modified. Files are compared by content.
 .PD 0
 .TP 17n
 \fB\-\-scratch\fR <dir>
@@ -214,10 +214,13 @@ is kept in
 What every writing command did, readable by you only, and the last
 number given to an archive.
 .TP
-.I ~/.password\-store/archivectl/<name>.gpg
+.I $PASSWORD_STORE_DIR/archivectl/<name>.gpg
 The passphrase of a repository, as
 .B pass show archivectl/<name>
-prints it.
+prints it;
+.B PASSWORD_STORE_DIR
+defaults to
+.IR ~/.password\-store .
 .SH COMPATIBILITY
 Archives without a number, as earlier versions named them, get the next
 numbers in time order, by

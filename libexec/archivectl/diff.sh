@@ -6,7 +6,8 @@ Usage:
   archivectl diff [--scratch <dir>] <id> [<id2>]
 
 Print one record per path that differs from archive <id> to <id2>, or to
-the live source: the path, then added, removed or modified.
+the live source: the path, then added, removed or modified. Files are
+compared by content.
 
 Options:
   --scratch <dir>  Where comparing with the live source extracts it.

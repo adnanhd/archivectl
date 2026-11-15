@@ -9,7 +9,7 @@ Archive the source into a new archive and print its record. A backup
 source in a parent directory is then archived too.
 
 Options:
-  -n, --dry-run  Report what would be archived and write nothing.
+  -n, --dry-run  Only list, on standard error, what would be archived.
   --stats        Also print the statistics borg gives.
 HELP
     exit 0

@@ -122,10 +122,13 @@ is kept in
 What every writing command did, readable by you only, and the last
 number given to an archive.
 .TP
-.I ~/.password\-store/archivectl/<name>.gpg
+.I $PASSWORD_STORE_DIR/archivectl/<name>.gpg
 The passphrase of a repository, as
 .B pass show archivectl/<name>
-prints it.
+prints it;
+.B PASSWORD_STORE_DIR
+defaults to
+.IR ~/.password\-store .
 .SH COMPATIBILITY
 Archives without a number, as earlier versions named them, get the next
 numbers in time order, by

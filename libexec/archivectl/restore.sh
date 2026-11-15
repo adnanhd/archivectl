@@ -5,7 +5,8 @@ show_help() {
 Usage:
   archivectl restore [-n] [--to <dir> | --mount <dir>] <id> [<path>...]
 
-Extract archive <id>, or the given paths in it, into the source.
+Extract archive <id>, or the given paths in it, into the source. A mount
+needs FUSE; borg umount <dir> unmounts it.
 
 Options:
   -n, --dry-run  Report what would be done and write nothing.
