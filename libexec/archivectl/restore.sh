@@ -6,7 +6,7 @@ Usage:
   archivectl restore [-n] [--to <dir> | --mount <dir>] <id> [<path>...]
 
 Extract archive <id>, or the given paths in it, into the source, but no
-.borgbackup file. A mount needs FUSE; borg umount <dir> unmounts it.
+.archivectl file. A mount needs FUSE; borg umount <dir> unmounts it.
 
 Options:
   -n, --dry-run  Report what would be done and write nothing.
@@ -53,10 +53,10 @@ run() {
 }
 
 # extract_archive NAME DIR [PATH...]: extract archive NAME, or PATHs in it,
-# into DIR, leaving out every configuration file, so that a restore never
-# turns the source back to the settings it had when NAME was made
+# into DIR, leaving out every configuration and ignore file, so that a
+# restore never turns the source back to the settings it had when NAME was made
 extract_archive() {
-    local name="$1" target="$2" config="re:(^|/)${CONFIG//./\\.}\$"
+    local name="$1" target="$2" config="re:(^|/)(${CONFIG//./\\.}|${IGNORE//./\\.})\$"
     shift 2
     if [ "$DRY_RUN" = true ]; then
         say "would restore archive ${NUMBERS[0]} into $target"

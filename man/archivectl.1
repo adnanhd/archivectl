@@ -109,7 +109,7 @@ Report what would be deleted and delete nothing.
 .PD
 .SS "archivectl restore [\-n] [\-\-to <dir> | \-\-mount <dir>] <id> [<path>...]"
 .PP
-Extract archive <id>, or the given paths in it, into the source, but no .borgbackup file. A mount needs FUSE; borg umount <dir> unmounts it.
+Extract archive <id>, or the given paths in it, into the source, but no .archivectl file. A mount needs FUSE; borg umount <dir> unmounts it.
 .PD 0
 .TP 15n
 \fB\-n\fR, \fB\-\-dry\-run\fR
@@ -173,7 +173,7 @@ id, or ids given and piped in together.
 .TP
 .B 3
 The
-.I .borgbackup
+.I .archivectl
 lacks a variable the command needs.
 .PD
 .PP
@@ -197,23 +197,23 @@ is not mounted.
 .TP
 .BR BORG_PASSPHRASE ", " BORG_PASSCOMMAND
 The passphrase, or a command that prints it; without either, here or in
-.IR .borgbackup ,
+.IR .archivectl ,
 a command asks for it once.
 .TP
 .B BORG_RSH
 What borg runs instead of ssh;
 .B init
 keeps it in
-.IR .borgbackup .
+.IR .archivectl .
 .TP
 .B XDG_STATE_HOME
 Where logs and archive numbers go; default
 .IR ~/.local/state .
 .SH FILES
 .TP
-.I .borgbackup
+.I .archivectl
 The configuration of a backup source, in its directory; see
-.BR archivectl.borgbackup (5).
+.BR archivectl (5).
 .TP
 .I $BORG_BACKUP_ROOT/<name>/
 The repository of a source, its archives named
@@ -241,7 +241,7 @@ prints it;
 defaults to
 .IR ~/.password\-store .
 .SH SEE ALSO
-.BR archivectl.borgbackup (5),
+.BR archivectl (5),
 .BR borg (1),
 .BR pass (1),
 .BR snapshotctl (1)

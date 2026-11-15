@@ -1,6 +1,6 @@
 # archivectl
 
-Numbered, encrypted, deduplicated archives of a directory with [BorgBackup](https://www.borgbackup.org/), on this host or on another one, the passphrase kept in [pass](https://www.passwordstore.org/).
+Numbered, encrypted, deduplicated archives of a directory with [BorgBackup](https://www.archivectl.org/), on this host or on another one, the passphrase kept in [pass](https://www.passwordstore.org/).
 
 ## Install
 
@@ -23,7 +23,7 @@ archivectl list --older 30 | archivectl delete -n     # what would go; drop -n t
 BORG_RSH='ssh -i ~/.ssh/borgbase_ed25519' archivectl init --repo ssh://xxxx@xxxx.repo.borgbase.com/./repo
 ```
 
-`archivectl --help` fits one screen, `archivectl <command> --help` covers one command, and `man archivectl` and `man 5 archivectl.borgbackup` cover the rest.
+`archivectl --help` fits one screen, `archivectl <command> --help` covers one command, and `man archivectl` and `man 5 archivectl` cover the rest.
 
 ## License
 

@@ -18,8 +18,9 @@ from hypothesis import HealthCheck, settings
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOL = ROOT / "archivectl"
-CONFIG = ".borgbackup"
-CONFIGS = (".myrsyncbackup", ".borgbackup")
+CONFIG = ".archivectl"
+IGNORE = ".archivectlignore"
+CONFIGS = (".snapshotctl", ".archivectl")
 # a pass that keeps its entries as plain files in $PASSWORD_STORE_DIR
 PASS_STUB = """#!/bin/sh
 case "$1" in

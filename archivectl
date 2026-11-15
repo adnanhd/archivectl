@@ -13,7 +13,8 @@ set -o pipefail
 SCRIPT_PATH="$(realpath "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 PROG=archivectl
-CONFIG=.borgbackup
+CONFIG=.archivectl
+IGNORE=.archivectlignore
 
 # make install writes its LIBDIR here
 INSTALLED_MODULE_DIR=""

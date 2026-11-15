@@ -34,11 +34,11 @@ end
 
 # in DIR [ID PREFIX]: the records of archivectl list for the source of DIR,
 # or the items of archive ID below PREFIX, "type path"; only when the
-# passphrase is in the environment or .borgbackup sets BORG_PASSCOMMAND, and
+# passphrase is in the environment or .archivectl sets BORG_PASSCOMMAND, and
 # with gpg kept from asking for its own
 set -g __archivectl_borg 'dir=$(realpath -- "$1") || exit 1
-until [ -f "$dir/.borgbackup" ]; do [ "$dir" != / ] || exit 1; dir=$(dirname "$dir"); done
-cd "$dir" && source ./.borgbackup >/dev/null 2>&1 || exit 1
+until [ -f "$dir/.archivectl" ]; do [ "$dir" != / ] || exit 1; dir=$(dirname "$dir"); done
+cd "$dir" && source ./.archivectl >/dev/null 2>&1 || exit 1
 [ -n "${BORG_PASSPHRASE:-}${BORG_PASSCOMMAND:-}" ] || exit 1
 export BORG_PASSCOMMAND BORG_RSH BORG_RELOCATED_REPO_ACCESS_IS_OK=no BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK=no
 export PASSWORD_STORE_GPG_OPTS="${PASSWORD_STORE_GPG_OPTS:-} --pinentry-mode=error"

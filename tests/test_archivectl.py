@@ -19,7 +19,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table
+from conftest import CONFIG, IGNORE, ROOT, TOOL, Sandbox, options_table
 
 # a record of list: number, date, size
 RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)\t(\d+)\t(\d+)\t(.*)")
@@ -1005,3 +1005,23 @@ def test_list_shows_the_files_the_size_only_an_archive_holds_and_its_note(sandbo
     assert [line.split("\t")[0] for line in human.splitlines()] == ["1", "2"]
     assert all(re.fullmatch(r"\d+(\.\d)?[KMGTPE]|\d{1,4}", line.split("\t")[2]) for line in human.splitlines())
     sandbox.run_ok("delete", "-n", stdin=human)
+
+
+def test_the_ignore_file_reads_as_gitignore_does(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    for name in ("skip.txt", "plain/skip.txt", "top/f.txt", "plain/top/f.txt", "tmp/f.txt", "plain/tmp/f.txt"):
+        (sandbox.source / name).parent.mkdir(parents=True, exist_ok=True)
+        (sandbox.source / name).write_text("x\n")
+    (sandbox.source / IGNORE).write_text("# comment\n\nskip.txt\n/top/\n")
+    sandbox.run_ok("create")
+    paths = set(subprocess.run(["borg", "list", "--format", "{path}{NL}", f"{sandbox.repository()}::"
+                                + archive_names(sandbox)[-1]], env=sandbox.env, capture_output=True, text=True,
+                               check=True).stdout.split())
+    assert {"skip.txt", "plain/skip.txt", "top/f.txt"}.isdisjoint(paths)
+    assert {"plain/top/f.txt", "tmp/f.txt", "plain/tmp/f.txt", IGNORE} <= paths
+    (sandbox.source / IGNORE).unlink()
+    sandbox.run_ok("create")
+    paths = set(subprocess.run(["borg", "list", "--format", "{path}{NL}", f"{sandbox.repository()}::"
+                                + archive_names(sandbox)[-1]], env=sandbox.env, capture_output=True, text=True,
+                               check=True).stdout.split())
+    assert {"tmp/f.txt", "plain/tmp/f.txt"}.isdisjoint(paths) and "skip.txt" in paths

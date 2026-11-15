@@ -1,5 +1,4 @@
 PROG := archivectl
-CONFIG := borgbackup
 
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
@@ -20,7 +19,7 @@ install: $(PROG)
 	install -Dm644 completions/fish/$(PROG).fish $(DESTDIR)$(FISH_COMPLETIONS_DIR)/$(PROG).fish
 	install -Dm644 completions/zsh/_$(PROG) $(DESTDIR)$(ZSH_COMPLETIONS_DIR)/_$(PROG)
 	install -Dm644 man/$(PROG).1 $(DESTDIR)$(MAN1DIR)/$(PROG).1
-	install -Dm644 man/$(PROG).$(CONFIG).5 $(DESTDIR)$(MAN5DIR)/$(PROG).$(CONFIG).5
+	install -Dm644 man/$(PROG).5 $(DESTDIR)$(MAN5DIR)/$(PROG).5
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(PROG)
@@ -29,7 +28,7 @@ uninstall:
 	rm -f $(DESTDIR)$(FISH_COMPLETIONS_DIR)/$(PROG).fish
 	rm -f $(DESTDIR)$(ZSH_COMPLETIONS_DIR)/_$(PROG)
 	rm -f $(DESTDIR)$(MAN1DIR)/$(PROG).1
-	rm -f $(DESTDIR)$(MAN5DIR)/$(PROG).$(CONFIG).5
+	rm -f $(DESTDIR)$(MAN5DIR)/$(PROG).5
 
 test:
 	python3 -m pytest tests

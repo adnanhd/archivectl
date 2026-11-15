@@ -1,14 +1,16 @@
-.\" Written by hand from lib/common.sh (require_config, build_exclude_params)
+.\" Written by hand from lib/common.sh (require_config, ignore_pattern, build_exclude_params)
 .\" and libexec/archivectl/*.sh; keep it in step with them.
-.TH ARCHIVECTL.BORGBACKUP 5 2026-11-15 "archivectl" "File Formats"
+.TH ARCHIVECTL 5 2026-11-15 "archivectl" "File Formats"
 .SH NAME
-archivectl.borgbackup, .borgbackup \- backup source configuration for archivectl
+\&.archivectl, .archivectlignore \- backup source configuration and ignore file for archivectl
 .SH SYNOPSIS
-.I <directory>/.borgbackup
+.I <directory>/.archivectl
+.br
+.I <directory>/.archivectlignore
 .SH DESCRIPTION
 .B archivectl init
 writes
-.I .borgbackup
+.I .archivectl
 into the directory it is to back up.
 Every other command of
 .BR archivectl (1)
@@ -58,26 +60,6 @@ Required by those three;
 .B init
 sets it to
 .BR ./ .
-.TP
-.B EXCLUDES
-A bash array of patterns
-.B create
-passes to
-.B borg create
-as
-.BI \-\-exclude " pattern"
-each, and
-.B diff
-to
-.B rsync
-as
-.BI \-\-exclude= pattern
-when it compares the live source.
-When it is not set the patterns are
-.BR .cache ,
-.B tmp
-and
-.BR __pycache__ .
 .PP
 When no directory at or above the current one holds the file, the
 command ends with status 1; a file that leaves a required variable empty
@@ -88,13 +70,49 @@ writes every value quoted for the shell
 so that a
 .BR $ ,
 a backquote or a space in a path stays part of it.
+.SH IGNORE FILE
+.I .archivectlignore
+beside
+.I .archivectl
+lists what
+.B create
+leaves out and
+.B diff
+does not compare, one pattern a line, read as
+.BR gitignore (5)
+reads it: a blank line or one starting with
+.B #
+is skipped; a name with no
+.B /
+matches at any depth; a pattern with a
+.B /
+at the start or inside matches from the source's top; a trailing
+.B /
+is dropped.
+A line starting with a borg pattern style
+.RB ( sh: ", " fm: ", " re: ", " pp: ", " pf: )
+goes to borg as it is.
+Without the file the patterns are
+.BR .cache ,
+.B tmp
+and
+.BR __pycache__ .
+.B restore
+leaves both files as they are.
 .SH EXAMPLES
 .EX
 # Backup repository configuration for /home/user/papers
 SOURCE_DIR=./
 BORG_REPO=/data/backup/borg/home__user__papers
 BORG_PASSCOMMAND=pass\e show\e \e'archivectl/home__user__papers\e'
-EXCLUDES=(".cache" "node_modules" "*.log")
+.EE
+.PP
+.EX
+# .archivectlignore
+\&.cache
+node_modules
+*.log
+/build/
 .EE
 .SH SEE ALSO
 .BR archivectl (1),
