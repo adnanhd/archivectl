@@ -11,7 +11,7 @@ make install        # into ~/.local; PREFIX=/usr DESTDIR=pkg for a package
 make test           # pytest and Hypothesis, in scratch directories
 ```
 
-`make install` puts the command, its modules, bash, fish and zsh completions and the manual pages under `PREFIX`; `make list-old` names what the old dedupctl install left.
+`make install` puts the command, its modules, bash, fish and zsh completions and the manual pages under `PREFIX`.
 
 ## Examples
 

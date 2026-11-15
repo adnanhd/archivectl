@@ -3,11 +3,9 @@ backup root, Borg base directory and source tree under $TMPDIR."""
 from __future__ import annotations
 
 import hashlib
-import io
 import os
 import shutil
 import subprocess
-import tarfile
 import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -22,8 +20,6 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOL = ROOT / "archivectl"
 CONFIG = ".borgbackup"
 CONFIGS = (".myrsyncbackup", ".borgbackup")
-# how versions before numbers named an archive
-OLD_NAME_FORMAT = "%Y-%m-%d_%H:%M:%S"
 # a pass that keeps its entries as plain files in $PASSWORD_STORE_DIR
 PASS_STUB = """#!/bin/sh
 case "$1" in
@@ -33,8 +29,6 @@ case "$1" in
     *) exit 1 ;;
 esac
 """
-# dedupctl as it was before archivectl, and the backuplib it used
-OLD_COMMIT, OLD_LIB_COMMIT = "af2fef1", "560f5db"
 
 settings.register_profile("tools", deadline=None, suppress_health_check=[HealthCheck.too_slow])
 settings.load_profile("tools")
@@ -65,16 +59,6 @@ def describe(path: Path) -> tuple[str, ...]:
         return (str(path), "dir", oct(status.st_mode))
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return (str(path), "file", oct(status.st_mode), digest, str(status.st_mtime_ns))
-
-
-def export(repository: Path, commit: str, destination: Path) -> None:
-    """The tree of COMMIT in the git REPOSITORY, written into DESTINATION."""
-    archive = subprocess.run(["git", "archive", "--format=tar", commit], cwd=repository,
-                             capture_output=True, check=False)
-    if archive.returncode != 0:
-        pytest.skip(f"{commit} is not in {repository}: {archive.stderr.decode().strip()}")
-    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        tar.extractall(destination, filter="data")
 
 
 class Sandbox:
@@ -164,20 +148,13 @@ class Sandbox:
         """The Borg repository of DIRECTORY (src)."""
         return Path(self.config_value("BORG_REPO", directory))
 
-    def fake_archive(self, moment: datetime) -> str:
+    def fake_archive(self, moment: datetime, number: int) -> str:
         """An archive of src/plain in the repository of src, dated MOMENT by borg
-        itself and named the way versions before numbers named it."""
-        name = moment.strftime(OLD_NAME_FORMAT)
+        itself and named with NUMBER as archivectl names one."""
+        name = f"{number}_{moment.strftime('%Y-%m-%d_%H%M%S')}"
         self.borg("create", "--timestamp", moment.strftime("%Y-%m-%dT%H:%M:%S"),
                   f"{self.repository()}::{name}", ".", cwd=self.source / "plain")
         return name
-
-    def old_tool(self) -> Path:
-        """dedupctl at OLD_COMMIT with its lib at OLD_LIB_COMMIT, exported from git."""
-        old = self.root / "old"
-        export(ROOT, OLD_COMMIT, old)
-        export(ROOT / "lib", OLD_LIB_COMMIT, old / "lib")
-        return old / "dedupctl"
 
 
 @pytest.fixture

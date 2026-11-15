@@ -33,17 +33,12 @@ run() {
     enter_repository BORG_REPO
     require_archive "${IDS[@]}"
     if [ "$DRY_RUN" = true ]; then
-        number_archives
         for i in "${NUMBERS[@]}"; do
             say "would delete archive $i"
         done
         return 0
     fi
     open_log
-    lock_sequence
-    number_archives
-    unlock_sequence
-    require_archive "${NUMBERS[@]}"
     borg delete "$BORG_REPO" "${NAMES[@]}" >&2
     for i in "${NUMBERS[@]}"; do
         say "deleted archive $i"

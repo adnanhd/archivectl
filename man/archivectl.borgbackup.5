@@ -87,8 +87,7 @@ writes every value quoted for the shell
 .RB ( "printf %q" ),
 so that a
 .BR $ ,
-a backquote or a space in a path stays part of it; files written by
-earlier versions, with the values in double quotes, are read as they are.
+a backquote or a space in a path stays part of it.
 .SH EXAMPLES
 .EX
 # Backup repository configuration for /home/user/papers
@@ -97,26 +96,6 @@ BORG_REPO=/data/backup/borg/home__user__papers
 BORG_PASSCOMMAND=pass\e show\e \e'archivectl/home__user__papers\e'
 EXCLUDES=(".cache" "node_modules" "*.log")
 .EE
-.SH COMPATIBILITY
-Archives without a number, as earlier versions named them, get the next
-numbers in time order by
-.B borg rename
-when
-.B create
-or
-.B delete
-first runs.
-.B init \-\-store\-passphrase
-moves an older source's passphrase to pass.
-A repository named with
-.B /
-written
-.B %2F
-is used where it is; one dedupctl named, with
-.BR ! ,
-is refused by
-.BR init ;
-sources dedupctl made keep working.
 .SH SEE ALSO
 .BR archivectl (1),
 .BR borg (1),

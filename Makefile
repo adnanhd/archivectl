@@ -1,6 +1,5 @@
 PROG := archivectl
 CONFIG := borgbackup
-OLD_PROG := dedupctl
 
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
@@ -10,12 +9,6 @@ FISH_COMPLETIONS_DIR ?= $(PREFIX)/share/fish/vendor_completions.d
 ZSH_COMPLETIONS_DIR ?= $(PREFIX)/share/zsh/site-functions
 MAN1DIR ?= $(PREFIX)/share/man/man1
 MAN5DIR ?= $(PREFIX)/share/man/man5
-
-# What the dedupctl Makefile installed; its fish completion went to ~/.config
-OLD_FISH_COMPLETIONS_DIR ?= $(HOME)/.config/fish/completions
-OLD_FILES = $(BINDIR)/$(OLD_PROG) $(PREFIX)/lib/$(OLD_PROG) $(PREFIX)/libexec/$(OLD_PROG) \
-	$(BASH_COMPLETIONS_DIR)/$(OLD_PROG) $(OLD_FISH_COMPLETIONS_DIR)/$(OLD_PROG).fish \
-	$(ZSH_COMPLETIONS_DIR)/_$(OLD_PROG) $(MAN1DIR)/$(OLD_PROG).1 $(MAN5DIR)/$(OLD_PROG).$(CONFIG).5
 
 install: $(PROG)
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(LIBDIR)
@@ -38,14 +31,7 @@ uninstall:
 	rm -f $(DESTDIR)$(MAN1DIR)/$(PROG).1
 	rm -f $(DESTDIR)$(MAN5DIR)/$(PROG).$(CONFIG).5
 
-# list-old prints the installed dedupctl files, one per line; uninstall-old removes them
-list-old:
-	@for path in $(addprefix $(DESTDIR),$(OLD_FILES)); do if [ -e "$$path" ] || [ -L "$$path" ]; then echo "$$path"; fi; done
-
-uninstall-old:
-	rm -rf $(addprefix $(DESTDIR),$(OLD_FILES))
-
 test:
 	python3 -m pytest tests
 
-.PHONY: install uninstall list-old uninstall-old test
+.PHONY: install uninstall test

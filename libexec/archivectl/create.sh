@@ -35,7 +35,6 @@ run() {
         say "$REPO_ROOT has no directory $SOURCE_DIR it can read, so no archive is made"
         status=1
     elif [ "$DRY_RUN" = true ]; then
-        number_archives
         next_number
         say "would create archive $NUMBER of $REPO_ROOT"
         borg create --dry-run --list "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$NUMBER" . >&2 || status=$?
@@ -61,7 +60,6 @@ archive_source() {
     local name
     open_log
     lock_sequence
-    number_archives
     next_number
     name="${NUMBER}_$(date '+%Y-%m-%d_%H%M%S')"
     printf '%s\n' "$NUMBER" >"$SEQUENCE"

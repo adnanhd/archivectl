@@ -24,8 +24,6 @@ from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table
 # a record of list: number, date, size
 RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)")
 WRITE_VERBS = ["change-passphrase", "create", "delete", "init", "initialise", "restore"]
-OLD_TOOL = "dedupctl"
-OLD_NAMES = ["backup", "prune", "mount", "extract", "size", "log"]
 OPTIONS = options_table()
 REPOSITORY_PATHS = {"src": ["a.txt", "plain", "inner/b.txt"], "inner": ["b.txt", "sub"]}
 
@@ -69,11 +67,10 @@ def test_delete_reads_back_what_list_prints(ages: list[tuple[int, int]], filters
     with Sandbox() as box:
         box.initialise()
         now = datetime.now(timezone.utc).replace(microsecond=0)
-        for days, seconds in ages:
-            box.fake_archive(now - timedelta(days=days, seconds=seconds))
-        # archives named the old way show the numbers they get, in time order
         oldest_first = sorted(range(len(ages)), key=lambda i: ages[i], reverse=True)
         numbers = {i: str(rank + 1) for rank, i in enumerate(oldest_first)}
+        for i, (days, seconds) in enumerate(ages):
+            box.fake_archive(now - timedelta(days=days, seconds=seconds), int(numbers[i]))
         listed = box.run_ok("list", *[str(word) for option in filters.items() for word in option])
         assert listed.stderr == ""
         selected = record_names(listed.stdout)
@@ -169,16 +166,6 @@ def test_create_in_a_parent_keeps_stdout_to_this_repository(sandbox: Sandbox) ->
     created = sandbox.run_ok("create", cwd=inner)
     assert created.stdout == sandbox.run_ok("list", cwd=inner).stdout
     assert len(record_names(sandbox.run_ok("list").stdout)) == 1
-
-
-@pytest.mark.parametrize("name", OLD_NAMES)
-def test_old_commands_are_gone(populated: Sandbox, name: str) -> None:
-    before = populated.state()
-    result = populated.run(name)
-    assert (result.returncode, result.stdout) == (2, "")
-    assert result.stderr == f"{TOOL.name}: unknown command '{name}'; see {TOOL.name} --help\n"
-    assert populated.state() == before
-    assert not (ROOT / OLD_TOOL).exists()
 
 
 # A wrong invocation: arguments ({root} the sandbox), standard input, status, and what its one line says.
@@ -355,30 +342,6 @@ def test_a_number_and_a_full_name_name_one_archive(sandbox: Sandbox) -> None:
     assert sandbox.run_ok("list").stdout == ""
 
 
-def test_archives_named_otherwise_are_numbered_once_in_time_order(sandbox: Sandbox) -> None:
-    sandbox.initialise()
-    for moment in (datetime(2026, 6, 1, 12, tzinfo=timezone.utc), datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)):
-        sandbox.fake_archive(moment)
-    sandbox.borg("create", "--timestamp", "2026-03-01T00:00:00", f"{sandbox.repository()}::by-hand", ".",
-                 cwd=sandbox.source / "plain")
-    listed = sandbox.run_ok("list").stdout
-    assert [line.split("\t")[:2] for line in listed.splitlines()] == [
-        ["1", "2026-01-02 03:04:05"], ["2", "2026-03-01 00:00:00"], ["3", "2026-06-01 12:00:00"]]
-    sandbox.run_ok("restore", "--to", str(sandbox.root / "out"), "2")
-    assert (sandbox.root / "out/p.txt").exists()
-    before = sandbox.state()
-    assert sandbox.run_ok("diff", "1", "by-hand").stdout == ""
-    for args in (["create", "-n"], ["delete", "-n", "2"]):
-        result = sandbox.run_ok(*args)
-        assert len(re.findall(r"would give archive \S+ the number", result.stderr)) == 3
-    assert sandbox.state() == before
-    created = sandbox.run_ok("create")
-    assert record_names(created.stdout) == ["4"] and created.stderr.count("gave archive") == 3
-    assert archive_names(sandbox)[:3] == ["1_2026-01-02_030405", "2_2026-03-01_000000", "3_2026-06-01_120000"]
-    assert sandbox.run_ok("list").stdout.splitlines()[:3] == listed.splitlines()
-    assert "gave archive" not in sandbox.run_ok("delete", "2").stderr
-
-
 def test_a_failed_create_deletes_only_the_archive_it_made(sandbox: Sandbox) -> None:
     sandbox.initialise()
     borg = shutil.which("borg")
@@ -451,33 +414,6 @@ def test_check_fails_on_a_damaged_repository(sandbox: Sandbox) -> None:
         damaged.write(b"\0" * 64)
     result = sandbox.run("check")
     assert result.returncode != 0 and result.stdout == ""
-
-
-def test_repositories_made_by_dedupctl_keep_working(sandbox: Sandbox) -> None:
-    old = sandbox.old_tool()
-    sandbox.initialise(tool=old, verb="init")
-    sandbox.run_ok("backup", tool=old)
-    assert (sandbox.repository() / "logs").is_dir()
-    first = newest(sandbox)
-    sandbox.run_ok("check")
-    second = record_names(sandbox.run_ok("create").stdout)[0]
-    assert (first, second) == ("1", "2") and archive_names(sandbox)[0].startswith("1_")
-    sandbox.run_ok("restore", "--to", str(sandbox.root / "out"), first, "a.txt")
-    assert (sandbox.root / "out/a.txt").read_text() == "outer\n"
-    assert sandbox.run_ok("diff", first, second).stdout == ""
-    sandbox.run_ok("delete", stdin=sandbox.run_ok("list").stdout)
-    assert sandbox.run_ok("list").stdout == ""
-
-
-def test_initialise_refuses_a_repository_under_the_old_name(sandbox: Sandbox) -> None:
-    sandbox.run_ok("init", tool=sandbox.old_tool())
-    repository = str(sandbox.repository())
-    (sandbox.source / CONFIG).unlink()
-    before = sandbox.state()
-    for flags in (["-n"], []):
-        result = sandbox.run("initialise", *flags)
-        assert result.returncode == 1 and repository in result.stderr
-        assert sandbox.state() == before
 
 
 def test_the_log_is_private_and_holds_no_borg_output(sandbox: Sandbox) -> None:
@@ -584,8 +520,7 @@ def test_a_long_path_keeps_its_names_under_name_max(sandbox: Sandbox) -> None:
 
 MAKE_DIRECTORIES = {"BINDIR": "bin", "LIBDIR": f"lib/{TOOL.name}", "BASH_COMPLETIONS_DIR": "share/bash-completion/completions",
                     "FISH_COMPLETIONS_DIR": "share/fish/vendor_completions.d", "ZSH_COMPLETIONS_DIR": "share/zsh/site-functions",
-                    "MAN1DIR": "share/man/man1", "MAN5DIR": "share/man/man5", "OLD_FISH_COMPLETIONS_DIR": "old-fish"}
-OLD_PROG, CONFIG_NAME = "dedupctl", "borgbackup"
+                    "MAN1DIR": "share/man/man1", "MAN5DIR": "share/man/man5"}
 
 
 def make(target: str, prefix: Path, **overrides: str) -> subprocess.CompletedProcess[str]:
@@ -609,24 +544,6 @@ def test_install_replaces_a_link_and_not_what_it_points_at(tmp_path: Path) -> No
     assert not installed.is_symlink() and checkout.read_bytes() == TOOL.read_bytes()
     result = subprocess.run([str(installed), "list"], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 1 and f"no {CONFIG}" in result.stderr
-
-
-def test_list_old_shows_what_uninstall_old_removes(tmp_path: Path) -> None:
-    prefix = tmp_path / "prefix"
-    assert make("install", prefix).returncode == 0
-    installed = sorted(path for path in prefix.rglob("*") if not path.is_dir())
-    old = [prefix / "bin" / OLD_PROG, prefix / "lib" / OLD_PROG, prefix / "libexec" / OLD_PROG,
-           prefix / "old-fish" / f"{OLD_PROG}.fish", prefix / f"share/man/man1/{OLD_PROG}.1",
-           prefix / f"share/man/man5/{OLD_PROG}.{CONFIG_NAME}.5"]
-    for path in old:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("old\n")
-    dangling = prefix / "share/bash-completion/completions" / OLD_PROG
-    dangling.symlink_to(tmp_path / "gone")
-    assert sorted(make("list-old", prefix).stdout.splitlines()) == sorted(map(str, old + [dangling]))
-    assert make("uninstall-old", prefix).returncode == 0
-    assert make("list-old", prefix).stdout == ""
-    assert sorted(path for path in prefix.rglob("*") if not path.is_dir()) == installed
 
 
 def test_create_without_its_source_fails_and_still_creates_in_the_parent(sandbox: Sandbox) -> None:
@@ -1005,15 +922,10 @@ def storage_name(function: str, path: Path) -> str:
                           capture_output=True, text=True, check=True).stdout.rstrip("\n")
 
 
-def test_repositories_are_named_after_the_path_and_found_under_the_earlier_name(sandbox: Sandbox) -> None:
+def test_repositories_are_named_after_the_path(sandbox: Sandbox) -> None:
     sandbox.initialise()
     assert sandbox.repository() == sandbox.backups / storage_name("safe_name", sandbox.source)
     assert storage_name("safe_name", Path("/home/adhd/test")) == "home__adhd__test"
-    inner = sandbox.source / "inner"
-    encoded = sandbox.backups / storage_name("encoded_name", inner)
-    sandbox.borg("init", "--encryption=repokey", str(encoded))
-    sandbox.run_ok("init", cwd=inner)
-    assert sandbox.repository(inner) == encoded
 
 
 def test_storage_goes_under_data_backup_when_data_is_mounted(sandbox: Sandbox) -> None:

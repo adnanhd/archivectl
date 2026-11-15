@@ -179,8 +179,8 @@ ask_passphrase() {
     printf '\n' >&2
 }
 
-# An archive is named N_YYYY-MM-DD_HHMMSS, N its number; one named
-# otherwise, as versions before numbers named them, is not numbered yet.
+# An archive is named N_YYYY-MM-DD_HHMMSS, N its number; an archive named
+# otherwise is not archivectl's and is left out.
 NUMBERED='^[1-9][0-9]*_[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]$'
 
 # sequence_file: where the last number given to an archive of BORG_REPO is
@@ -198,24 +198,15 @@ last_number() {
     printf '%s\n' "$n"
 }
 
-# archive_entries: "number<TAB>date<TAB>name<TAB>borg id" of every archive,
-# by number, the date YYYY-MM-DD HH:MM:SS of its start; one not numbered
-# yet shows the number number_archives gives it, the next after the last
-# given, in time order. A failing borg list ends it with borg's status.
+# archive_entries: "number<TAB>date<TAB>name<TAB>borg id" of every numbered
+# archive, by number, the date YYYY-MM-DD HH:MM:SS of its start. A failing
+# borg list ends it with borg's status.
 archive_entries() {
-    local last listing
-    last=$(last_number)
+    local listing
     listing=$(borg list --format '{barchive}{TAB}{start:%Y-%m-%d %H:%M:%S}{TAB}{id}{NL}' "$BORG_REPO") || return
     [ -n "$listing" ] || return 0
-    LC_ALL=C awk -F '\t' -v OFS='\t' -v last="$last" -v numbered="$NUMBERED" '
-        $1 ~ numbered {
-            n = substr($1, 1, index($1, "_") - 1) + 0
-            if (n > last) last = n
-            print n, $2, $1, $3
-            next
-        }
-        { old[++k] = $0 }
-        END { for (i = 1; i <= k; i++) { split(old[i], f, "\t"); print last + i, f[2], f[1], f[3] } }' <<<"$listing" |
+    LC_ALL=C awk -F '\t' -v OFS='\t' -v numbered="$NUMBERED" '
+        $1 ~ numbered { print substr($1, 1, index($1, "_") - 1) + 0, $2, $1, $3 }' <<<"$listing" |
         LC_ALL=C sort -t "$(printf '\t')" -k1,1n
 }
 
@@ -238,26 +229,6 @@ lock_sequence() {
 }
 unlock_sequence() {
     exec {SEQUENCE_FD}>&-
-}
-
-# number_archives: rename every archive not numbered yet to
-# N_YYYY-MM-DD_HHMMSS with borg rename, N the number archive_entries shows
-# for it and the time its start, and keep N in the sequence file; with
-# DRY_RUN=true only say what it would rename
-number_archives() {
-    local entries number date name new
-    entries=$(archive_entries)
-    while IFS=$'\t' read -r number date name _; do
-        [ -n "$name" ] && [[ ! "$name" =~ $NUMBERED ]] || continue
-        new="${number}_${date:0:10}_${date:11:2}${date:14:2}${date:17:2}"
-        if [ "$DRY_RUN" = true ]; then
-            say "would give archive $name the number $number, renaming it $new"
-            continue
-        fi
-        borg rename "$BORG_REPO::$name" "$new" >&2
-        printf '%s\n' "$number" >"$(sequence_file)"
-        say "gave archive $name the number $number, renamed it $new"
-    done <<<"$entries"
 }
 
 # require_archive ID...: NUMBERS and NAMES, the number and the name of the
