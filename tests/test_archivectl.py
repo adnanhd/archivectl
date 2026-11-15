@@ -22,7 +22,7 @@ from hypothesis import strategies as st
 from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table
 
 # a record of list: number, date, size
-RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)")
+RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)\t(\d+)\t(\d+)\t(.*)")
 WRITE_VERBS = ["change-passphrase", "create", "delete", "init", "initialise", "restore"]
 OPTIONS = options_table()
 REPOSITORY_PATHS = {"src": ["a.txt", "plain", "inner/b.txt"], "inner": ["b.txt", "sub"]}
@@ -93,7 +93,7 @@ def listings(populated: Sandbox) -> dict[Path, str]:
 def draw_options(data: st.DataObject, verb: str, box: Sandbox) -> list[str]:
     """-n or --dry-run among a drawn subset of VERB's other options, values filled in."""
     values = {"--to": str(box.root / "elsewhere"), "--mount": str(box.root / "mountpoint"),
-              "--repo": str(box.root / "other-repository")}
+              "--repo": str(box.root / "other-repository"), "-m": "a note", "--message": "a note"}
     others = [(name, takes) for name, takes in OPTIONS[verb] if name not in ("-n", "--dry-run")]
     chosen = data.draw(st.lists(st.sampled_from(others), unique=True)) if others else []
     groups = [[name, values[name]] if takes else [name] for name, takes in chosen]
@@ -989,3 +989,19 @@ def test_change_passphrase_reads_the_new_one_twice_on_a_terminal(sandbox: Sandbo
     assert record_names(sandbox.run_ok("list").stdout) == ["1"]
     result = sandbox.run("change-passphrase")
     assert result.returncode == 1 and "BORG_NEW_PASSPHRASE" in result.stderr
+
+
+def test_list_shows_the_files_the_size_only_an_archive_holds_and_its_note(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    sandbox.run_ok("create", "-m", "first\tnote")
+    (sandbox.source / "plain" / "new.txt").write_text("x" * 5000)
+    sandbox.run_ok("create")
+    records = [RECORD.fullmatch(line) for line in sandbox.run_ok("list").stdout.splitlines()]
+    assert len(records) == 2 and all(records)
+    first, second = records
+    assert (first.group(6), second.group(6)) == ("first\\tnote", "")
+    assert int(second.group(4)) == int(first.group(4)) + 1 and int(second.group(5)) > 0
+    human = sandbox.run_ok("list", "--human-readable").stdout
+    assert [line.split("\t")[0] for line in human.splitlines()] == ["1", "2"]
+    assert all(re.fullmatch(r"\d+(\.\d)?[KMGTPE]|\d{1,4}", line.split("\t")[2]) for line in human.splitlines())
+    sandbox.run_ok("delete", "-n", stdin=human)

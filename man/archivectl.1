@@ -38,13 +38,11 @@ Run it in the backed-up directory or below it, or name that with
 .SH EXAMPLES
 .EX
 archivectl init && archivectl create
-archivectl status
 archivectl diff 4
 archivectl restore \-\-to /tmp/old 4 notes.txt
 archivectl list \-\-older 30 | archivectl delete \-n
 archivectl delete 2 3
 archivectl init \-\-repo ssh://backup\-host/srv/borg/home__adhd__test
-archivectl export\-key \-\-paper > key.txt
 .EE
 .SH COMMANDS
 .SS "archivectl init [\-n] [\-\-repo <url>] [\-\-no\-pass] [\-\-store\-passphrase] [<path>]"
@@ -64,34 +62,40 @@ Keep the passphrase out of pass.
 \fB\-\-store\-passphrase\fR
 Keep the passphrase of an older source in pass.
 .PD
-.SS "archivectl create [\-n] [\-\-stats]"
+.SS "archivectl create [\-n] [\-m <text>] [\-\-stats]"
 .PP
 Archive the source into a new archive and print its record. A backup source in a parent directory is then archived too.
 .PD 0
-.TP 15n
+.TP 22n
 \fB\-n\fR, \fB\-\-dry\-run\fR
-Only list, on standard error, what would be archived.
-.TP 15n
+List on standard error what would be archived.
+.TP 22n
+\fB\-m\fR, \fB\-\-message\fR <text>
+Keep <text> with the archive as its comment.
+.TP 22n
 \fB\-\-stats\fR
 Also print the statistics borg gives.
 .PD
 .SS "archivectl status"
 .PP
 Print one record of the backup source here: source, repository, number of archives, number and date of the newest, and the bytes it takes.
-.SS "archivectl list [\-\-older N] [\-\-newer N] [\-\-first N] [\-\-last N]"
+.SS "archivectl list [\-\-human\-readable] [\-\-older N] [\-\-newer N] [\-\-first N] [\-\-last N]"
 .PP
-Print one record per archive, oldest first: number, date, original size in bytes. The age options select first, then \-\-first and \-\-last.
+One record per archive, oldest first: number, date, size, files, the size deleting it frees, and its comment. Age options select, then \-\-first, \-\-last.
 .PD 0
-.TP 11n
+.TP 18n
+\fB\-\-human\-readable\fR
+Sizes in K, M, G, T instead of bytes.
+.TP 18n
 \fB\-\-older\fR N
 Only the archives older than N days.
-.TP 11n
+.TP 18n
 \fB\-\-newer\fR N
 Only the archives newer than N days.
-.TP 11n
+.TP 18n
 \fB\-\-first\fR N
 Then only the oldest N.
-.TP 11n
+.TP 18n
 \fB\-\-last\fR N
 Then only the newest N.
 .PD
@@ -197,7 +201,7 @@ The passphrase, or a command that prints it; without either, here or in
 a command asks for it once.
 .TP
 .B BORG_RSH
-The command borg reaches another host with, instead of ssh;
+What borg runs instead of ssh;
 .B init
 keeps it in
 .IR .borgbackup .

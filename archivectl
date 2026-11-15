@@ -43,9 +43,9 @@ usage: archivectl [-C <dir>] <command> [<options>]
 
   init [-n] [--repo <url>] [<path>]
                                 make a directory a backup source
-  create [-n]                   archive the source into a new archive
+  create [-n] [-m <text>]       archive the source into a new archive
   status                        print the source and its repository
-  list [--older N] [--newer N] [--first N] [--last N]
+  list [--human-readable] [--older N] [--newer N] [--first N] [--last N]
                                 print each archive: number, date, size
   delete [-n] [<id>...]         delete the archives named or piped in
   restore [-n] [--to <dir>] ... <id> [<path>...]
@@ -252,20 +252,25 @@ require_archive() {
 }
 
 # with_sizes: every entry "number<TAB>date<TAB>name<TAB>borg id" read on
-# stdin as the record "number<TAB>date<TAB>size", the size the original
-# size in bytes of the archive
+# stdin as the record "number<TAB>date<TAB>size<TAB>files<TAB>own<TAB>comment":
+# the original size in bytes, the number of files, the bytes only this
+# archive holds (what deleting it frees), and its comment; with HUMAN=true
+# in the environment the two sizes in K, M, G
 with_sizes() {
     local entries info
     entries=$(cat)
     [ -n "$entries" ] || return 0
     info=$(borg info --json --glob-archives '*' "$BORG_REPO")
-    awk -F '\t' -v OFS='\t' '
+    LC_ALL=C awk -F '\t' -v OFS='\t' "$AWK_ESCAPE$AWK_JSON$AWK_HUMAN"'
         NR == FNR {
-            if ($0 ~ /^ *"id": "/) { id = $0; gsub(/^ *"id": "|",?$/, "", id) }
-            if ($0 ~ /^ *"original_size": /) { size = $0; gsub(/[^0-9]/, "", size); sizes[id] = size }
+            if ($0 ~ /^ *"comment": "/) { c = $0; sub(/^ *"comment": "/, "", c); sub(/",?$/, "", c); comment = unjson(c) }
+            if ($0 ~ /^ *"id": "/) { id = $0; gsub(/^ *"id": "|",?$/, "", id); comments[id] = comment; comment = "" }
+            if ($0 ~ /^ *"deduplicated_size": /) { v = $0; gsub(/[^0-9]/, "", v); own[id] = v }
+            if ($0 ~ /^ *"nfiles": /) { v = $0; gsub(/[^0-9]/, "", v); files[id] = v }
+            if ($0 ~ /^ *"original_size": /) { v = $0; gsub(/[^0-9]/, "", v); sizes[id] = v }
             next
         }
-        { print $1, $2, sizes[$4] }
+        { print $1, $2, size(sizes[$4]), files[$4], size(own[$4]), esc(shown(comments[$4])) }
     ' <(printf '%s\n' "$info") <(printf '%s\n' "$entries")
 }
 

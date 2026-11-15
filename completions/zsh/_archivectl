@@ -74,6 +74,7 @@ _archivectl() {
             '1:directory:_files -/' ;;
         (create) _arguments \
             '(-n --dry-run)'{-n,--dry-run}'[Report what would be renamed and archived and write nothing.]' \
+            '(-m --message)'{-m,--message}'[Keep <text> with the archive as its comment.]:text:' \
             '--stats[Also print the statistics borg gives.]' \
             '(-h --help)'{-h,--help}'[Print the help of create.]' ;;
         (status|check) _arguments \
@@ -85,6 +86,7 @@ _archivectl() {
             '(-n --dry-run)'{-n,--dry-run}'[Report what would change and change nothing.]' \
             '(-h --help)'{-h,--help}'[Print the help of change-passphrase.]' ;;
         (list) _arguments \
+            '--human-readable[Sizes in K, M, G, T instead of bytes.]' \
             '--older[Only the archives older than N days.]:N:' \
             '--newer[Only the archives newer than N days.]:N:' \
             '--first[Then only the oldest N of those.]:N:' \

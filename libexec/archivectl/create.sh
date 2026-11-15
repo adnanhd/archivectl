@@ -3,29 +3,39 @@
 show_help() {
     cat <<'HELP'
 Usage:
-  archivectl create [-n] [--stats]
+  archivectl create [-n] [-m <text>] [--stats]
 
 Archive the source into a new archive and print its record. A backup
 source in a parent directory is then archived too.
 
 Options:
-  -n, --dry-run  Only list, on standard error, what would be archived.
-  --stats        Also print the statistics borg gives.
+  -n, --dry-run         List on standard error what would be archived.
+  -m, --message <text>  Keep <text> with the archive as its comment.
+  --stats               Also print the statistics borg gives.
 HELP
     exit 0
 }
 
 run() {
-    local arg status=0 parent=0 STATS=false
+    local status=0 parent=0 STATS=false
+    local -a args=("$@")
     DRY_RUN=false
-    for arg in "$@"; do
-        case "$arg" in
+    COMMENT=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
             -n|--dry-run) DRY_RUN=true ;;
+            -m|--message)
+                [ $# -gt 1 ] || die "$1 needs a text." $EXIT_INVALID_ARGS
+                COMMENT=(--comment "$2")
+                shift
+                ;;
             --stats) STATS=true ;;
             -h|--help) show_help ;;
-            *) die "create: unknown argument '$arg'" $EXIT_INVALID_ARGS ;;
+            *) die "create: unknown argument '$1'" $EXIT_INVALID_ARGS ;;
         esac
+        shift
     done
+    set -- "${args[@]}"
     enter_repository SOURCE_DIR BORG_REPO
     build_exclude_params borg
     # borg runs in SOURCE_DIR, entered here, so that a failure to enter it
@@ -71,7 +81,7 @@ archive_source() {
     # and the reader shows them as text, the statistics only with --stats;
     # drop_archive reads the fingerprint in them
     if BORG_EXIT_CODES=modern borg create --log-json --stats --list --filter=CE --compression lz4 \
-            "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . 2>&1 |
+            "${COMMENT[@]}" "${EXCLUDE_PARAMS[@]}" "$BORG_REPO::$name" . 2>&1 |
         tee "$BORG_OUTPUT" | STATS="$STATS" LC_ALL=C awk "$AWK_JSON$AWK_BORG_LOG" >&2; then
         status=0
     else

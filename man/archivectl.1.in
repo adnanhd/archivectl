@@ -33,13 +33,11 @@ Run it in the backed-up directory or below it, or name that with
 .SH EXAMPLES
 .EX
 archivectl init && archivectl create
-archivectl status
 archivectl diff 4
 archivectl restore \-\-to /tmp/old 4 notes.txt
 archivectl list \-\-older 30 | archivectl delete \-n
 archivectl delete 2 3
 archivectl init \-\-repo ssh://backup\-host/srv/borg/home__adhd__test
-archivectl export\-key \-\-paper > key.txt
 .EE
 .SH COMMANDS
 .\" @generated commands
@@ -89,7 +87,7 @@ The passphrase, or a command that prints it; without either, here or in
 a command asks for it once.
 .TP
 .B BORG_RSH
-The command borg reaches another host with, instead of ssh;
+What borg runs instead of ssh;
 .B init
 keeps it in
 .IR .borgbackup .

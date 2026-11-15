@@ -61,7 +61,7 @@ _archivectl() {
         fi
         case $word in
             -C) if [ -z "$cmd" ]; then value=C; fi ;;
-            --to|--mount|--scratch|--repo|--older|--newer|--first|--last) value=1 ;;
+            --to|--mount|--scratch|--repo|--older|--newer|--first|--last|-m|--message) value=1 ;;
             -*) ;;
             *) if [ -z "$cmd" ]; then cmd=$word; else operands+=("$word"); fi ;;
         esac
@@ -76,9 +76,9 @@ _archivectl() {
     fi
     case $cmd in
         init|initialise) opts="-n --dry-run --repo --no-pass --store-passphrase -h --help" ;;
-        create) opts="-n --dry-run --stats -h --help" ;;
+        create) opts="-n --dry-run -m --message --stats -h --help" ;;
         status) opts="-h --help" ;;
-        list) opts="--older --newer --first --last -h --help" ;;
+        list) opts="--human-readable --older --newer --first --last -h --help" ;;
         delete) opts="-n --dry-run -h --help" ;;
         restore) opts="-n --dry-run --to --mount -h --help" ;;
         diff) opts="--scratch -h --help" ;;
@@ -88,7 +88,7 @@ _archivectl() {
     esac
     case $previous in
         --to|--mount|--scratch) _archivectl_dirs; return ;;
-        --repo|--older|--newer|--first|--last) return ;;
+        --repo|--older|--newer|--first|--last|-m|--message) return ;;
     esac
     if [[ $cur == -* ]]; then
         mapfile -t COMPREPLY < <(compgen -W "$opts" -- "$cur")
