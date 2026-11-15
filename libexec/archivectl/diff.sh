@@ -7,10 +7,11 @@ Usage:
 
 Print one record per path that differs from archive <id> to <id2>, or to
 the live source: the path, then added, removed or modified. Files are
-compared by content.
+compared by content; for the live source the archive is first extracted
+into $TMPDIR, or /tmp, and needs room there.
 
 Options:
-  --scratch <dir>  Where comparing with the live source extracts it.
+  --scratch <dir>  Extract into <dir> instead.
 HELP
     exit 0
 }
@@ -35,16 +36,28 @@ run() {
         die "diff takes one or two archive ids." $EXIT_INVALID_ARGS
     enter_repository SOURCE_DIR BORG_REPO
     require_archive "${names[@]}"
-    [ ${#names[@]} -eq 2 ] || [ -d "$scratch" ] ||
-        die "comparing with the live source extracts the archive: name a directory with room for it, --scratch <dir>." $EXIT_INVALID_ARGS
     if [ ${#names[@]} -eq 2 ]; then
         # one archive named twice compares with itself
         archive_diff "${NAMES[0]}" "${NAMES[1]:-${NAMES[0]}}"
-    else
-        [[ "$scratch/" != "$(realpath -- "$SOURCE_DIR")"/* ]] ||
-            die "--scratch must be outside the source $(realpath -- "$SOURCE_DIR")." $EXIT_INVALID_ARGS
-        live_diff "${NAMES[0]}" "$scratch"
+        return
     fi
+    [ -n "$scratch" ] || scratch=$(realpath -m -- "${TMPDIR:-/tmp}")
+    [ -d "$scratch" ] || die "$scratch is not a directory." $EXIT_INVALID_ARGS
+    [[ "$scratch/" != "$(realpath -- "$SOURCE_DIR")"/* ]] ||
+        die "the scratch directory $scratch must be outside the source $(realpath -- "$SOURCE_DIR")." $EXIT_INVALID_ARGS
+    require_room "${NAMES[0]}" "$scratch"
+    live_diff "${NAMES[0]}" "$scratch"
+}
+
+# require_room NAME DIR: die unless the files of archive NAME fit in the
+# free space of DIR; borg list, unlike borg info, leaves borg's cache as it is
+require_room() {
+    local listing size free
+    listing=$(borg list --format '{size}{NL}' "$BORG_REPO::$1")
+    size=$(awk '{ total += $1 } END { printf "%.0f\n", total }' <<<"$listing")
+    free=$(df -Pk -- "$2" | awk 'NR == 2 { print $4 * 1024 }')
+    [ "$size" -le "${free:-0}" ] ||
+        die "archive ${NUMBERS[0]} takes $size bytes extracted and $2 has $free free; name a directory with room, --scratch <dir>."
 }
 
 # archive_diff A B: one record per path whose content or type differs from

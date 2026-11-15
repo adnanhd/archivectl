@@ -39,7 +39,7 @@ Run it in the backed-up directory or below it, or name that with
 .EX
 archivectl init && archivectl create
 archivectl status
-archivectl diff \-\-scratch /tmp 4
+archivectl diff 4
 archivectl restore \-\-to /tmp/old 4 notes.txt
 archivectl list \-\-older 30 | archivectl delete \-n
 archivectl list \-\-older 30 | archivectl delete
@@ -120,11 +120,11 @@ Mount the archive at <dir> instead.
 .PD
 .SS "archivectl diff [\-\-scratch <dir>] <id> [<id2>]"
 .PP
-Print one record per path that differs from archive <id> to <id2>, or to the live source: the path, then added, removed or modified. Files are compared by content.
+Print one record per path that differs from archive <id> to <id2>, or to the live source: the path, then added, removed or modified. Files are compared by content; for the live source the archive is first extracted into $TMPDIR, or /tmp, and needs room there.
 .PD 0
 .TP 17n
 \fB\-\-scratch\fR <dir>
-Where comparing with the live source extracts it.
+Extract into <dir> instead.
 .PD
 .SS "archivectl check"
 .PP

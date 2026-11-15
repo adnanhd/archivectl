@@ -34,7 +34,7 @@ Run it in the backed-up directory or below it, or name that with
 .EX
 archivectl init && archivectl create
 archivectl status
-archivectl diff \-\-scratch /tmp 4
+archivectl diff 4
 archivectl restore \-\-to /tmp/old 4 notes.txt
 archivectl list \-\-older 30 | archivectl delete \-n
 archivectl list \-\-older 30 | archivectl delete

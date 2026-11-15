@@ -400,10 +400,28 @@ def test_a_name_that_names_no_archive_ends_with_status_1(populated: Sandbox, arg
     assert populated.state() == before
 
 
-def test_diff_with_the_live_source_needs_a_scratch_directory(populated: Sandbox, listings: dict[Path, str]) -> None:
-    result = populated.run("diff", record_names(listings[populated.source])[0])
-    assert (result.returncode, result.stdout) == (2, "")
-    assert "--scratch" in result.stderr
+def test_diff_with_the_live_source_extracts_into_tmpdir_and_leaves_nothing(populated: Sandbox,
+                                                                          listings: dict[Path, str]) -> None:
+    name = record_names(listings[populated.source])[0]
+    tmp = Path(populated.env["TMPDIR"])
+    tmp.mkdir(exist_ok=True)
+    before = sorted(tmp.iterdir())
+    assert populated.run_ok("diff", name).stdout == populated.run_ok("diff", "--scratch", str(tmp), name).stdout
+    assert sorted(tmp.iterdir()) == before
+
+
+def test_diff_with_too_little_room_ends_with_status_1(populated: Sandbox, listings: dict[Path, str]) -> None:
+    name = record_names(listings[populated.source])[0]
+    stub = populated.root / "bin" / "df"
+    stub.write_text('#!/bin/sh\necho "Filesystem 1024-blocks Used Available Capacity Mounted on"\necho "x 1 1 0 100% /"\n')
+    stub.chmod(0o755)
+    try:
+        before = populated.state()
+        result = populated.run("diff", name)
+        assert (result.returncode, result.stdout) == (1, "") and "--scratch" in result.stderr
+        assert populated.state() == before
+    finally:
+        stub.unlink()
 
 
 def test_check_fails_on_a_damaged_repository(sandbox: Sandbox) -> None:
