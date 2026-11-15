@@ -118,9 +118,9 @@ is kept in
 .TP
 .I $XDG_STATE_HOME/archivectl/<name>.log
 .TQ
-.I $XDG_STATE_HOME/archivectl/<name>.sequence
+.I $XDG_STATE_HOME/archivectl/<repo>.sequence
 What every writing command did, readable by you only, and the last
-number given to an archive.
+number in the repository, <repo> written as <name> is.
 .TP
 .I $PASSWORD_STORE_DIR/archivectl/<name>.gpg
 The passphrase of a repository, as
