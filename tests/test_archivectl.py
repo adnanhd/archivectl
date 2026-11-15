@@ -23,7 +23,7 @@ from conftest import CONFIG, ROOT, TOOL, Sandbox, options_table
 
 # a record of list: number, date, size
 RECORD = re.compile(r"([1-9]\d*)\t(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(\d+)")
-WRITE_VERBS = ["create", "delete", "init", "initialise", "restore"]
+WRITE_VERBS = ["change-passphrase", "create", "delete", "init", "initialise", "restore"]
 OLD_TOOL = "dedupctl"
 OLD_NAMES = ["backup", "prune", "mount", "extract", "size", "log"]
 OPTIONS = options_table()
@@ -821,7 +821,7 @@ def help_phrases() -> dict[str, str]:
     lines = subprocess.run([str(TOOL), "--help"], capture_output=True, text=True, check=True).stdout.splitlines()
     phrases: dict[str, str] = {}
     for i, line in enumerate(lines):
-        match = re.match(r"^  ([a-z]+)\b(.*?)(?:\s{2,}(\S.*))?$", line)
+        match = re.match(r"^  ([a-z][a-z-]*)\b(.*?)(?:\s{2,}(\S.*))?$", line)
         if match and match.group(1) != TOOL.name:
             phrases[match.group(1)] = match.group(3) or lines[i + 1].strip()
     return phrases
@@ -843,9 +843,9 @@ def test_the_help_fits_one_screen_and_every_command_has_its_own() -> None:
 def test_completions_describe_commands_with_the_phrases_of_the_help() -> None:
     phrases = help_phrases()
     fish = (ROOT / "completions/fish" / f"{TOOL.name}.fish").read_text()
-    fished = dict(re.findall(r"-a (\w+) -d '([^']*)'", fish))
+    fished = dict(re.findall(r"-a ([\w-]+) -d '([^']*)'", fish))
     zsh = (ROOT / "completions/zsh" / f"_{TOOL.name}").read_text()
-    zshed = {name: text.replace("\\:", ":") for name, text in re.findall(r"^    '(\w+):(.*)'$", zsh, re.M)}
+    zshed = {name: text.replace("\\:", ":") for name, text in re.findall(r"^    '([\w-]+):(.*)'$", zsh, re.M)}
     for command, phrase in phrases.items():
         assert fished[command] == phrase and zshed[command] == phrase, command
 
@@ -1033,3 +1033,47 @@ def test_the_manual_pages_fit_150_lines_at_80_columns() -> None:
         rendered = subprocess.run(["man", "-l", str(page)], env={**os.environ, "MANWIDTH": "80", "MANPAGER": "cat"},
                                   capture_output=True, text=True, check=True).stdout
         assert 0 < len(rendered.splitlines()) <= 150, page.name
+
+
+def test_export_key_prints_the_key_borg_imports_back(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    sandbox.run_ok("create")
+    before = sandbox.state()
+    key = sandbox.run_ok("export-key").stdout
+    paper = sandbox.run_ok("export-key", "--paper").stdout
+    assert key.startswith("BORG_KEY ") and paper and paper != key
+    assert sandbox.state() == before
+    exported = sandbox.root / "exported.key"
+    exported.write_text(key)
+    sandbox.borg("key", "import", str(sandbox.repository()), str(exported))
+    assert record_names(sandbox.run_ok("list").stdout) == ["1"]
+    result = sandbox.run("export-key", "--qr")
+    assert (result.returncode, result.stdout) == (2, "")
+
+
+def test_change_passphrase_changes_the_repository_and_its_pass_entry(sandbox: Sandbox) -> None:
+    sandbox.initialise()
+    sandbox.run_ok("create")
+    entry = sandbox.root / "pass" / TOOL.name / f"{storage_name('safe_name', sandbox.source)}.gpg"
+    del sandbox.env["BORG_PASSPHRASE"]
+    before = sandbox.state()
+    assert "would give" in sandbox.run_ok("change-passphrase", "-n").stderr
+    assert sandbox.state() == before and entry.read_text() == "throwaway\n"
+    sandbox.env["BORG_NEW_PASSPHRASE"] = "fresh"
+    sandbox.run_ok("change-passphrase")
+    del sandbox.env["BORG_NEW_PASSPHRASE"]
+    assert entry.read_text() == "fresh\n"
+    assert record_names(sandbox.run_ok("list").stdout) == ["1"]
+    sandbox.env["BORG_PASSPHRASE"] = "throwaway"
+    assert sandbox.run("list").returncode != 0
+
+
+def test_change_passphrase_reads_the_new_one_twice_on_a_terminal(sandbox: Sandbox) -> None:
+    sandbox.initialise(None, TOOL, "init", "--no-pass")
+    sandbox.run_ok("create")
+    status, output = run_on_a_terminal(sandbox, "change-passphrase", answer=b"typed twice")
+    assert status == 0 and output.count("assphrase for") == 2, output
+    sandbox.env["BORG_PASSPHRASE"] = "typed twice"
+    assert record_names(sandbox.run_ok("list").stdout) == ["1"]
+    result = sandbox.run("change-passphrase")
+    assert result.returncode == 1 and "BORG_NEW_PASSPHRASE" in result.stderr

@@ -51,6 +51,8 @@ _archivectl() {
     'restore:extract an archive, or paths in it'
     'diff:print the paths that differ'
     'check:check the repository with borg check'
+    'export-key:print the key of the repository'
+    'change-passphrase:give the repository a new passphrase'
     'initialise:same as init'
   )
   _arguments -C \
@@ -76,6 +78,12 @@ _archivectl() {
             '(-h --help)'{-h,--help}'[Print the help of create.]' ;;
         (status|check) _arguments \
             '(-h --help)'{-h,--help}'[Print the help of the command.]' ;;
+        (export-key) _arguments \
+            '--paper[The form for typing the key back by hand.]' \
+            '(-h --help)'{-h,--help}'[Print the help of export-key.]' ;;
+        (change-passphrase) _arguments \
+            '(-n --dry-run)'{-n,--dry-run}'[Report what would change and change nothing.]' \
+            '(-h --help)'{-h,--help}'[Print the help of change-passphrase.]' ;;
         (list) _arguments \
             '--older[Only the archives older than N days.]:N:' \
             '--newer[Only the archives newer than N days.]:N:' \

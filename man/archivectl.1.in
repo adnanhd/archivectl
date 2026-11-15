@@ -22,9 +22,9 @@ and
 show what the archives hold and bring it back; and
 .B delete
 removes the archives you name.
-An archive's id is its number, 1, 2, 3 and so on, never given twice.
-Records go to standard output, one per line with tab-separated fields,
-and messages to standard error.
+An archive's id is its number, never given twice.
+Records go to standard output, one per line, tab-separated; messages to
+standard error.
 Every command that writes takes
 .B \-n
 to only report what it would do.
@@ -37,10 +37,9 @@ archivectl status
 archivectl diff 4
 archivectl restore \-\-to /tmp/old 4 notes.txt
 archivectl list \-\-older 30 | archivectl delete \-n
-archivectl list \-\-older 30 | archivectl delete
 archivectl delete 2 3
-BORG_RSH='ssh \-i ~/.ssh/borgbase_ed25519' \e
-    archivectl init \-\-repo ssh://xxxx@xxxx.repo.borgbase.com/./repo
+archivectl init \-\-repo ssh://backup\-host/srv/borg/home__adhd__test
+archivectl export\-key \-\-paper > key.txt
 .EE
 .SH COMMANDS
 .\" @generated commands
@@ -129,30 +128,6 @@ prints it;
 .B PASSWORD_STORE_DIR
 defaults to
 .IR ~/.password\-store .
-.SH COMPATIBILITY
-Archives without a number, as earlier versions named them, get the next
-numbers in time order, by
-.BR "borg rename" ,
-when
-.B create
-or
-.B delete
-first runs;
-.B \-n
-only reports it.
-.B archivectl init \-\-store\-passphrase
-moves the passphrase of an older source to pass.
-A repository named the earlier way, with
-.B /
-written
-.BR %2F ,
-is used where it is; one dedupctl named, with
-.B /
-written
-.BR ! ,
-is refused by
-.BR init ,
-and sources dedupctl made keep working.
 .SH SEE ALSO
 .BR archivectl.borgbackup (5),
 .BR borg (1),

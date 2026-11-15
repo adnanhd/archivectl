@@ -27,7 +27,7 @@ OLD_NAME_FORMAT = "%Y-%m-%d_%H:%M:%S"
 # a pass that keeps its entries as plain files in $PASSWORD_STORE_DIR
 PASS_STUB = """#!/bin/sh
 case "$1" in
-    insert) shift; [ "$1" = -m ] && shift; mkdir -p "$PASSWORD_STORE_DIR/$(dirname "$1")"; cat >"$PASSWORD_STORE_DIR/$1.gpg" ;;
+    insert) shift; while [ "${1#-}" != "$1" ]; do shift; done; mkdir -p "$PASSWORD_STORE_DIR/$(dirname "$1")"; cat >"$PASSWORD_STORE_DIR/$1.gpg" ;;
     show) cat "$PASSWORD_STORE_DIR/$2.gpg" ;;
     rm) shift; [ "$1" = -f ] && shift; rm -f "$PASSWORD_STORE_DIR/$1.gpg" ;;
     *) exit 1 ;;

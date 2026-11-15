@@ -45,7 +45,7 @@ _archivectl_paths() {
 
 _archivectl() {
     local line=${COMP_LINE:0:COMP_POINT} cur previous word cmd="" value="" cdir=. opts=""
-    local subcommands="init initialise create status list delete restore diff check"
+    local subcommands="init initialise create status list delete restore diff check export-key change-passphrase"
     local -a words operands=()
     COMPREPLY=()
     read -ra words <<<"$line"
@@ -83,6 +83,8 @@ _archivectl() {
         restore) opts="-n --dry-run --to --mount -h --help" ;;
         diff) opts="--scratch -h --help" ;;
         check) opts="-h --help" ;;
+        export-key) opts="--paper -h --help" ;;
+        change-passphrase) opts="-n --dry-run -h --help" ;;
     esac
     case $previous in
         --to|--mount|--scratch) _archivectl_dirs; return ;;

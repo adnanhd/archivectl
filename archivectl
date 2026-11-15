@@ -53,6 +53,8 @@ usage: archivectl [-C <dir>] <command> [<options>]
   diff [--scratch <dir>] <id> [<id2>]
                                 print the paths that differ
   check                         check the repository with borg check
+  export-key [--paper]          print the key of the repository
+  change-passphrase [-n]        give the repository a new passphrase
 
   -C <dir> run in <dir>; -n report only, write nothing; -h print this help
 
@@ -318,7 +320,7 @@ COMMAND="$1"
 shift
 case "$COMMAND" in
     init|initialise) source "$MODULE_DIR/init.sh" ;;
-    create|status|list|delete|restore|diff|check) source "$MODULE_DIR/$COMMAND.sh" ;;
+    create|status|list|delete|restore|diff|check|export-key|change-passphrase) source "$MODULE_DIR/$COMMAND.sh" ;;
     *) die "unknown command '$COMMAND'; see $PROG --help" $EXIT_INVALID_ARGS ;;
 esac
 run "$@"
